@@ -5,12 +5,12 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:132456789}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-132456789}
       POSTGRES_DB: matcha_db
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql
       - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d matcha_db -h 127.0.0.1"]
@@ -18,6 +18,15 @@ services:
       timeout: 5s
       retries: 10
       start_period: 20s
+
+  adminer:
+    image: adminer
+    container_name: matcha-adminer
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
 
 volumes:
   pgdata:
