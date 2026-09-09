@@ -11,3 +11,7 @@ node_modules
 dist
 ./Backend/dist
 ./Frontend/dist
+
+# User-uploaded profile photos (never commit user content)
+Backend/uploads
+uploads

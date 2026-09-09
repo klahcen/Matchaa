@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { authApi } from '../api/auth';
 import { AuthCard } from '../components/common/AuthCard';
@@ -10,57 +10,54 @@ export const VerifyEmailPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const token = paramToken || searchParams.get('token');
 
-  const [loading, setLoading] = useState(true);
+  // Initialized from the token so a URL with no token renders the error state
+  // immediately, instead of flashing a spinner before an effect corrects it.
+  const [loading, setLoading] = useState<boolean>(Boolean(token));
   const [success, setSuccess] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  // Ref guard to prevent duplicate API calls in React StrictMode
-  const requestedTokenRef = useRef<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(
+    token ? null : 'No verification token provided.'
+  );
 
   useEffect(() => {
-    if (!token) {
-      setErrorMessage('No verification token provided.');
-      setLoading(false);
-      return;
-    }
+    // No token in the URL: nothing to call. The initial state above already
+    // describes this case, so there is no state to write here.
+    if (!token) return;
 
-    // Skip duplicate request if already fired for this token
-    if (requestedTokenRef.current === token) {
-      return;
-    }
-    requestedTokenRef.current = token;
-
-    let isMounted = true;
+    // An AbortController replaces the previous `requestedTokenRef` + `isMounted`
+    // guards. Those deadlocked under StrictMode: the ref suppressed the second
+    // effect run while the cleanup flag suppressed the first run's state
+    // updates, so setLoading(false) was never reached and the spinner hung
+    // forever (swallowing success AND error, hence the silent console).
+    // Cancelling the superseded request lets the surviving run own the UI state.
+    const controller = new AbortController();
 
     const performVerification = async () => {
-      if (!token) {
-        if (isMounted) {
-          setErrorMessage('No verification token provided.');
-          setLoading(false);
-        }
-        return;
-      }
-
+      setLoading(true);
       try {
-        await authApi.verifyEmail(token);
-        if (isMounted) {
-          setSuccess(true);
-        }
+        await authApi.verifyEmail(token, { signal: controller.signal });
+        setSuccess(true);
+        setErrorMessage(null);
       } catch (err: any) {
-        if (isMounted) {
-          setErrorMessage(err.message || 'Verification failed. The token may be expired or invalid.');
-        }
+        // This run was cancelled by our own cleanup (StrictMode remount, token
+        // change, or unmount). A newer run owns the state now — or nothing does,
+        // if we unmounted — so exit without touching it.
+        if (controller.signal.aborted) return;
+        setErrorMessage(
+          err?.message || 'Verification failed. The token may be expired or invalid.'
+        );
       } finally {
-        if (isMounted) {
+        // Only a run that was NOT cancelled may clear the spinner. An aborted
+        // run must leave it alone, or it would fight the run that replaced it.
+        if (!controller.signal.aborted) {
           setLoading(false);
         }
       }
     };
 
-    performVerification();
+    void performVerification();
 
     return () => {
-      isMounted = false;
+      controller.abort();
     };
   }, [token]);
 
@@ -72,8 +69,8 @@ export const VerifyEmailPage: React.FC = () => {
         subtitle="Please wait while we activate your account..."
       >
         <div className="flex flex-col items-center justify-center py-10">
-          <div className="w-14 h-14 border-4 border-rose-200 border-t-[#fd297b] rounded-full animate-spin mb-4" />
-          <p className="text-sm font-medium text-gray-500">Checking verification token...</p>
+          <div className="w-14 h-14 border-4 border-brand-accent/20 border-t-brand-accent rounded-full animate-spin mb-4" />
+          <p className="text-sm font-medium text-brand-muted">Checking verification token...</p>
         </div>
       </AuthCard>
     );
@@ -97,8 +94,8 @@ export const VerifyEmailPage: React.FC = () => {
             </svg>
           </div>
 
-          <p className="text-gray-700 font-medium mb-2">Welcome to the community!</p>
-          <p className="text-xs text-gray-500 mb-8 leading-relaxed max-w-xs">
+          <p className="text-brand-text font-medium mb-2">Welcome to the community!</p>
+          <p className="text-xs text-brand-muted mb-8 leading-relaxed max-w-xs">
             Your email has been confirmed. You can now log in and begin discovering matches near you.
           </p>
 
@@ -116,11 +113,11 @@ export const VerifyEmailPage: React.FC = () => {
       title="Verification Failed"
       subtitle="We could not verify your email address"
       footer={
-        <p className="text-sm text-gray-600">
+        <p className="text-sm text-brand-muted">
           Need a new account?{' '}
           <Link
             to="/register"
-            className="font-bold text-[#fd297b] hover:text-[#ff5864] transition-colors"
+            className="font-bold text-brand-accent hover:text-brand-mid transition-colors"
           >
             Register again
           </Link>
@@ -130,7 +127,7 @@ export const VerifyEmailPage: React.FC = () => {
       <div className="flex flex-col items-center text-center py-2">
         <ErrorBanner message={errorMessage} />
 
-        <div className="w-14 h-14 rounded-full bg-rose-50 text-rose-500 flex items-center justify-center mb-4">
+        <div className="w-14 h-14 rounded-full bg-brand-error-bg text-brand-error-text flex items-center justify-center mb-4">
           <svg className="w-7 h-7 fill-current" viewBox="0 0 20 20">
             <path
               fillRule="evenodd"
@@ -140,7 +137,7 @@ export const VerifyEmailPage: React.FC = () => {
           </svg>
         </div>
 
-        <p className="text-xs text-gray-500 mb-6 leading-relaxed">
+        <p className="text-xs text-brand-muted mb-6 leading-relaxed">
           The link might have expired (valid for 24 hours) or was already used. Try logging in or create a new account to request another email.
         </p>
 

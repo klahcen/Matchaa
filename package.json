@@ -1,0 +1,18 @@
+{
+  "name": "matcha",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Root dev orchestration for the Matcha project: Backend (Express + TypeScript) and Frontend (React + Vite) are separate npm projects.",
+  "scripts": {
+    "dev": "concurrently -n backend,frontend -c blue.bold,magenta.bold -p '{time} {name}' -t HH:mm:ss --pad-prefix --kill-others-on-fail 'npm --prefix Backend run dev' 'npm --prefix Frontend run dev'",
+    "dev:backend": "npm --prefix Backend run dev",
+    "dev:frontend": "npm --prefix Frontend run dev",
+    "dev:db": "docker compose up -d --wait db",
+    "dev:full": "npm run dev:db && npm run dev",
+    "db:stop": "docker compose stop db",
+    "db:logs": "docker compose logs -f db"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

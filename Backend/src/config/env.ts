@@ -24,10 +24,17 @@ export const env = {
   RESEND_API_KEY: process.env.RESEND_API_KEY || '',
   MAIL_FROM: process.env.MAIL_FROM || 'onboarding@resend.dev',
 
+  // Pexels API — SEED SCRIPT ONLY (scripts/seedFakeProfiles.ts).
+  // Never used by the running app; real users upload their own photos.
+  PEXELS_API_KEY: process.env.PEXELS_API_KEY || '',
+
   // Application public URL for email links
   APP_URL: process.env.APP_URL || 'http://localhost:3000',
   CLIENT_URL: process.env.CLIENT_URL || 'http://localhost:5173',
 
   // Paths
   DATA_DIR: path.resolve(__dirname, '../../data'),
+  UPLOAD_DIR: process.env.UPLOAD_DIR
+    ? path.resolve(process.env.UPLOAD_DIR)
+    : path.resolve(__dirname, '../../uploads'),
 } as const;

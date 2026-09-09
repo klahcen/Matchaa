@@ -24,10 +24,10 @@ export const FormInput: React.FC<FormInputProps> = ({
   return (
     <div className="w-full flex flex-col mb-4">
       <div className="flex justify-between items-center mb-1.5">
-        <label htmlFor={id} className="text-xs font-semibold uppercase tracking-wider text-gray-700">
+        <label htmlFor={id} className="text-xs font-semibold uppercase tracking-wider text-brand-text">
           {label}
         </label>
-        {hint && <span className="text-xs text-gray-400">{hint}</span>}
+        {hint && <span className="text-xs text-brand-muted">{hint}</span>}
       </div>
 
       <div className="relative flex items-center">
@@ -35,11 +35,11 @@ export const FormInput: React.FC<FormInputProps> = ({
           id={id}
           type={effectiveType}
           disabled={disabled}
-          className={`w-full min-h-[46px] px-4 py-2.5 text-sm bg-gray-50/70 border ${
+          className={`w-full min-h-[46px] px-4 py-2.5 text-sm bg-brand-bg/80 border ${
             error
-              ? 'border-rose-400 focus:border-rose-500 focus:ring-rose-200'
-              : 'border-gray-200 focus:border-[#fd297b] focus:ring-[#fd297b]/20'
-          } rounded-xl text-gray-900 placeholder-gray-400 outline-none transition-all duration-150 focus:bg-white focus:ring-3 disabled:bg-gray-100 disabled:cursor-not-allowed ${
+              ? 'border-brand-error-text/60 focus:border-brand-error-text focus:ring-brand-error-bg'
+              : 'border-brand-border focus:border-brand-accent focus:ring-brand-accent/20'
+          } rounded-xl text-brand-text placeholder-brand-muted/70 outline-none transition-all duration-150 focus:bg-brand-surface focus:ring-3 disabled:bg-gray-100 disabled:cursor-not-allowed ${
             isPasswordType ? 'pr-11' : ''
           } ${className}`}
           {...props}
@@ -86,7 +86,7 @@ export const FormInput: React.FC<FormInputProps> = ({
       </div>
 
       {error && (
-        <p className="text-xs text-rose-600 font-medium mt-1.5 flex items-center gap-1 transition-opacity duration-200">
+        <p className="text-xs text-brand-error-text font-medium mt-1.5 flex items-center gap-1 transition-opacity duration-200">
           <svg className="w-3.5 h-3.5 shrink-0 fill-current" viewBox="0 0 20 20">
             <path
               fillRule="evenodd"

@@ -1,11 +1,18 @@
 import React from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { BrowsePlaceholderPage } from './pages/BrowsePlaceholderPage';
+import { SocketProvider } from './context/SocketContext';
+import { BrowsePage } from './pages/BrowsePage';
+import { ChatPage } from './pages/ChatPage';
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage';
 import { LoginPage } from './pages/LoginPage';
+import { LandingPage } from './pages/LandingPage';
+import { ProfileLikersPage } from './pages/ProfileLikersPage';
+import { ProfilePage } from './pages/ProfilePage';
+import { ProfileViewersPage } from './pages/ProfileViewersPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { ResetPasswordPage } from './pages/ResetPasswordPage';
+import { ProfileViewPage } from './pages/ProfileViewPage';
 import { VerifyEmailPage } from './pages/VerifyEmailPage';
 
 // Protected route wrapper for authenticated views like /browse
@@ -14,7 +21,7 @@ const ProtectedRoute: React.FC<{ children: React.ReactElement }> = ({ children }
 
   if (isLoading) {
     return (
-      <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-[#fd297b] via-[#ff5864] to-[#ff655b]">
+      <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-brand-start via-brand-mid to-brand-end">
         <div className="w-12 h-12 border-4 border-white/30 border-t-white rounded-full animate-spin" />
       </div>
     );
@@ -33,7 +40,7 @@ const PublicRoute: React.FC<{ children: React.ReactElement }> = ({ children }) =
 
   if (isLoading) {
     return (
-      <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-[#fd297b] via-[#ff5864] to-[#ff655b]">
+      <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-brand-start via-brand-mid to-brand-end">
         <div className="w-12 h-12 border-4 border-white/30 border-t-white rounded-full animate-spin" />
       </div>
     );
@@ -49,8 +56,15 @@ const PublicRoute: React.FC<{ children: React.ReactElement }> = ({ children }) =
 export const AppRoutes: React.FC = () => {
   return (
     <Routes>
-      {/* Root redirect */}
-      <Route path="/" element={<Navigate to="/login" replace />} />
+      {/* Root landing page (redirects logged-in users to /browse) */}
+      <Route
+        path="/"
+        element={
+          <PublicRoute>
+            <LandingPage />
+          </PublicRoute>
+        }
+      />
 
       {/* Auth routes */}
       <Route
@@ -84,16 +98,72 @@ export const AppRoutes: React.FC = () => {
       <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
 
-      {/* Authenticated browse route */}
+      {/* Authenticated browse route — suggestions grid with filters and sorting */}
       <Route
         path="/browse"
         element={
           <ProtectedRoute>
-            <BrowsePlaceholderPage />
+            <BrowsePage />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Profile routes */}
+      <Route
+        path="/profile"
+        element={
+          <ProtectedRoute>
+            <ProfilePage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/profile/viewers"
+        element={
+          <ProtectedRoute>
+            <ProfileViewersPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/profile/likers"
+        element={
+          <ProtectedRoute>
+            <ProfileLikersPage />
+          </ProtectedRoute>
+        }
+      />
+      {/* Public profile detail (Profile View feature: full profile + like/block/report,
+          visit recorded in the views history log) — declared after the static
+          /profile/* routes. React Router ranks static segments above dynamic
+          ones, so /profile/viewers and /profile/likers still win over /profile/:userId. */}
+      <Route
+        path="/profile/:userId"
+        element={
+          <ProtectedRoute>
+            <ProfileViewPage />
           </ProtectedRoute>
         }
       />
       <Route path="/dashboard" element={<Navigate to="/browse" replace />} />
+
+      {/* Chat routes */}
+      <Route
+        path="/chat"
+        element={
+          <ProtectedRoute>
+            <ChatPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/chat/:userId"
+        element={
+          <ProtectedRoute>
+            <ChatPage />
+          </ProtectedRoute>
+        }
+      />
 
       {/* Catch-all fallback */}
       <Route path="*" element={<Navigate to="/login" replace />} />
@@ -105,7 +175,9 @@ export const App: React.FC = () => {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <AppRoutes />
+        <SocketProvider>
+          <AppRoutes />
+        </SocketProvider>
       </AuthProvider>
     </BrowserRouter>
   );

@@ -77,8 +77,8 @@ export const ResetPasswordPage: React.FC = () => {
             </svg>
           </div>
 
-          <p className="text-gray-700 font-medium mb-2">You're all set!</p>
-          <p className="text-xs text-gray-500 mb-8 leading-relaxed max-w-xs">
+          <p className="text-brand-text font-medium mb-2">You're all set!</p>
+          <p className="text-xs text-brand-muted mb-8 leading-relaxed max-w-xs">
             You can now sign in to your Matcha account using your new password.
           </p>
 
@@ -95,11 +95,11 @@ export const ResetPasswordPage: React.FC = () => {
       title="Create New Password"
       subtitle="Enter and confirm your new strong password"
       footer={
-        <p className="text-sm text-gray-600">
+        <p className="text-sm text-brand-muted">
           Back to{' '}
           <Link
             to="/login"
-            className="font-bold text-[#fd297b] hover:text-[#ff5864] transition-colors inline-block py-1"
+            className="font-bold text-brand-accent hover:text-brand-mid transition-colors inline-block py-1"
           >
             Sign in
           </Link>

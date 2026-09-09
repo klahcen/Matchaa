@@ -50,18 +50,18 @@ export const ForgotPasswordPage: React.FC = () => {
         subtitle="Password reset instructions have been dispatched"
       >
         <div className="flex flex-col items-center text-center py-4">
-          <div className="w-16 h-16 rounded-full bg-rose-50 text-[#fd297b] flex items-center justify-center mb-4">
+          <div className="w-16 h-16 rounded-full bg-brand-bg text-brand-accent flex items-center justify-center mb-4">
             <svg className="w-8 h-8 fill-current" viewBox="0 0 20 20">
               <path d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z" />
               <path d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z" />
             </svg>
           </div>
 
-          <p className="text-gray-800 font-semibold mb-2">
+          <p className="text-brand-text font-semibold mb-2">
             Reset link on the way
           </p>
-          <p className="text-xs text-gray-500 mb-8 leading-relaxed max-w-xs">
-            If an account is associated with <strong className="text-gray-700">{email}</strong>, you will receive a link to reset your password within a few minutes. (Valid for 1 hour).
+          <p className="text-xs text-brand-muted mb-8 leading-relaxed max-w-xs">
+            If an account is associated with <strong className="text-brand-text">{email}</strong>, you will receive a link to reset your password within a few minutes. (Valid for 1 hour).
           </p>
 
           <Link to="/login" className="w-full">
@@ -77,11 +77,11 @@ export const ForgotPasswordPage: React.FC = () => {
       title="Forgot Password?"
       subtitle="Enter your email to receive a password reset link"
       footer={
-        <p className="text-sm text-gray-600">
+        <p className="text-sm text-brand-muted">
           Remember your password?{' '}
           <Link
             to="/login"
-            className="font-bold text-[#fd297b] hover:text-[#ff5864] transition-colors inline-block py-1"
+            className="font-bold text-brand-accent hover:text-brand-mid transition-colors inline-block py-1"
           >
             Sign in
           </Link>

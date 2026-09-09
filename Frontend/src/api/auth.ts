@@ -11,14 +11,44 @@ const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000/api/auth';
 
 /**
+ * Hard ceiling on any single API call. Without this, a backend that accepts the
+ * TCP connection but never replies (hung DB query, half-dead dev server) leaves
+ * fetch pending forever and the UI spins indefinitely.
+ */
+const REQUEST_TIMEOUT_MS = 10_000;
+
+/**
  * Universal JSON fetch helper with credentials: 'include' for httpOnly cookie auth.
+ *
+ * Every call is bounded by REQUEST_TIMEOUT_MS. A caller-supplied `signal` is
+ * honoured too (used by VerifyEmailPage to cancel in-flight work on cleanup);
+ * the two are combined so whichever fires first wins.
  */
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<ApiResponse<T>> {
   const url = `${API_BASE_URL}${endpoint}`;
+  const { signal: callerSignal, ...restOptions } = options;
+
+  const controller = new AbortController();
+  let timedOut = false;
+
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, REQUEST_TIMEOUT_MS);
+
+  const forwardCallerAbort = () => controller.abort();
+  if (callerSignal) {
+    if (callerSignal.aborted) {
+      controller.abort();
+    } else {
+      callerSignal.addEventListener('abort', forwardCallerAbort, { once: true });
+    }
+  }
 
   const config: RequestInit = {
-    ...options,
+    ...restOptions,
     credentials: 'include', // Ensures httpOnly JWT cookies are sent and received
+    signal: controller.signal,
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json',
@@ -51,10 +81,26 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 
     return data;
   } catch (error: any) {
+    // A deliberate caller-initiated cancellation (component unmounted, StrictMode
+    // cleanup, token change). Re-throw untouched so callers can ignore it
+    // instead of flashing a bogus error at the user.
+    if (callerSignal?.aborted && !timedOut) {
+      throw error;
+    }
+
+    if (timedOut) {
+      throw new Error(
+        `Matcha server did not respond within ${REQUEST_TIMEOUT_MS / 1000} seconds. Please check that the backend is running and try again.`
+      );
+    }
+
     if (error.name === 'TypeError' && error.message.includes('fetch')) {
       throw new Error('Unable to connect to Matcha server. Please check your internet connection or try again.');
     }
     throw error;
+  } finally {
+    clearTimeout(timer);
+    callerSignal?.removeEventListener('abort', forwardCallerAbort);
   }
 }
 
@@ -65,9 +111,14 @@ export const authApi = {
       body: JSON.stringify(payload),
     }),
 
-  verifyEmail: (token: string) =>
+  /**
+   * Accepts an optional AbortSignal so the caller can cancel an in-flight
+   * verification (StrictMode remount, navigation away, token change).
+   */
+  verifyEmail: (token: string, options?: { signal?: AbortSignal }) =>
     request<User>(`/verify/${encodeURIComponent(token)}`, {
       method: 'GET',
+      signal: options?.signal,
     }),
 
   resendVerification: (email: string) =>

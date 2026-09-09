@@ -2,6 +2,7 @@ import { createApp } from './app';
 import { pool, testDbConnection } from './config/db';
 import { env } from './config/env';
 import { loadCommonPasswords } from './services/authService';
+import { initializeSocketServer } from './sockets/socketServer';
 
 const startServer = async (): Promise<void> => {
   try {
@@ -39,9 +40,20 @@ const startServer = async (): Promise<void> => {
       console.log(`[Server] Auth endpoints available at ${env.APP_URL}/api/auth`);
     });
 
+    // Initialize Socket.io server
+    const io = initializeSocketServer(server);
+    console.log('[Socket.io] Real-time server initialized');
+
+    // Make io available globally for controllers to emit notifications
+    (global as any).io = io;
+
     // Graceful shutdown handling
     const handleShutdown = async (signal: string) => {
       console.log(`\n[Server] Received ${signal}. Starting graceful shutdown...`);
+
+      io.close(() => {
+        console.log('[Socket.io] Server closed.');
+      });
 
       server.close(async () => {
         console.log('[Server] HTTP server closed.');

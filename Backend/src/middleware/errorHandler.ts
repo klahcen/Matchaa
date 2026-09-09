@@ -39,6 +39,25 @@ export const errorHandler = (
     return;
   }
 
+  // Handle multer upload errors (size limit, unexpected field, no file) as 400s
+  // so oversized/invalid uploads never surface as an opaque 500.
+  if (err?.name === 'MulterError') {
+    const multerMessages: Record<string, string> = {
+      LIMIT_FILE_SIZE: 'Image is too large. Maximum allowed size is 5 MB.',
+      LIMIT_FILE_COUNT: 'Too many files uploaded. Only one photo per request is allowed.',
+      LIMIT_FIELD_COUNT: 'Too many fields in the upload request.',
+      LIMIT_FIELD_KEY: 'Upload field name is too long.',
+      LIMIT_FIELD_VALUE: 'Upload field value is too large.',
+      LIMIT_PART_COUNT: 'Too many parts in the upload request.',
+      LIMIT_UNEXPECTED_FILE: 'Unexpected upload field. The photo must be sent in a "photo" field.',
+    };
+    res.status(400).json({
+      success: false,
+      message: multerMessages[err.code] || 'File upload failed. Please try again.',
+    });
+    return;
+  }
+
   // Log unhandled unexpected errors to server console only
   console.error('[Unhandled Error caught by errorHandler]:', {
     name: err?.name,

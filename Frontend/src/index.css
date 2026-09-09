@@ -1,8 +1,46 @@
 @import "tailwindcss";
+@config "../tailwind.config.js";
+
+@theme {
+  --color-brand-start: #FD297B;
+  --color-brand-mid: #FF5864;
+  --color-brand-end: #FF655B;
+  --color-brand-accent: #FD297B;
+  --color-brand-text: #333333;
+  --color-brand-muted: #757575;
+  --color-brand-border: #E5E5E5;
+  --color-brand-surface: #FFFFFF;
+  --color-brand-bg: #F8F8F8;
+  --color-brand-error-bg: #FFEBEE;
+  --color-brand-error-text: #D32F2F;
+
+  --color-tinder-start: #FD297B;
+  --color-tinder-mid: #FF5864;
+  --color-tinder-end: #FF655B;
+  --color-tinder-accent: #FD297B;
+}
+
+@utility bg-brand-gradient {
+  background-image: linear-gradient(135deg, #FD297B 0%, #FF5864 50%, #FF655B 100%);
+}
+
+@utility bg-brand-gradient-r {
+  background-image: linear-gradient(to right, #FD297B 0%, #FF5864 50%, #FF655B 100%);
+}
+
+@utility text-brand-gradient {
+  background-image: linear-gradient(to right, #FD297B, #FF655B);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
 
 @layer base {
   * {
     box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
   }
 
   body {

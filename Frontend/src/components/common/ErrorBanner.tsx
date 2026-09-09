@@ -9,8 +9,8 @@ export const ErrorBanner: React.FC<ErrorBannerProps> = ({ message, onDismiss }) 
   if (!message) return null;
 
   return (
-    <div className="w-full bg-rose-50 border border-rose-200 text-rose-700 text-sm rounded-2xl p-3.5 flex items-start gap-3 mb-4 transition-all duration-200">
-      <div className="shrink-0 mt-0.5 text-rose-500">
+    <div className="w-full bg-brand-error-bg border border-[#FFCDD2] text-brand-error-text text-sm rounded-2xl p-3.5 flex items-start gap-3 mb-4 transition-all duration-200">
+      <div className="shrink-0 mt-0.5 text-brand-error-text">
         <svg className="w-5 h-5 fill-current" viewBox="0 0 20 20">
           <path
             fillRule="evenodd"
@@ -26,7 +26,7 @@ export const ErrorBanner: React.FC<ErrorBannerProps> = ({ message, onDismiss }) 
         <button
           type="button"
           onClick={onDismiss}
-          className="shrink-0 text-rose-400 hover:text-rose-600 transition-colors"
+          className="shrink-0 text-brand-error-text/70 hover:text-brand-error-text transition-colors"
           aria-label="Dismiss error"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

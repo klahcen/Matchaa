@@ -85,11 +85,11 @@ export const LoginPage: React.FC = () => {
       title="Welcome back"
       subtitle="Sign in to continue connecting on Matcha"
       footer={
-        <p className="text-sm text-gray-600">
+        <p className="text-sm text-brand-muted">
           Don't have an account?{' '}
           <Link
             to="/register"
-            className="font-bold text-[#fd297b] hover:text-[#ff5864] transition-colors inline-block py-1"
+            className="font-bold text-brand-accent hover:text-brand-mid transition-colors inline-block py-1"
           >
             Create one
           </Link>
@@ -100,8 +100,8 @@ export const LoginPage: React.FC = () => {
         <ErrorBanner message={apiError} onDismiss={() => setApiError(null)} />
 
         {showResend && (
-          <div className="mb-5 p-3.5 bg-rose-50/70 border border-rose-100 rounded-2xl text-left">
-            <p className="text-xs font-semibold text-gray-700 mb-1.5">
+          <div className="mb-5 p-3.5 bg-brand-bg border border-brand-border rounded-2xl text-left">
+            <p className="text-xs font-semibold text-brand-text mb-1.5">
               Need a new activation link?
             </p>
             <div className="flex gap-2">
@@ -110,13 +110,13 @@ export const LoginPage: React.FC = () => {
                 value={resendEmail}
                 onChange={(e) => setResendEmail(e.target.value)}
                 placeholder="Enter your email"
-                className="flex-1 text-xs px-3 py-2 bg-white border border-gray-300 rounded-xl focus:outline-none focus:border-[#fd297b]"
+                className="flex-1 text-xs px-3 py-2 bg-brand-surface border border-brand-border rounded-xl focus:outline-none focus:border-brand-accent"
               />
               <button
                 type="button"
                 onClick={handleResend}
                 disabled={resendLoading || !resendEmail.trim()}
-                className="text-xs font-semibold px-3.5 py-2 bg-[#fd297b] text-white rounded-xl hover:bg-[#ff5864] transition-colors disabled:opacity-50 shrink-0"
+                className="text-xs font-semibold px-3.5 py-2 bg-brand-accent text-white rounded-xl hover:bg-brand-mid transition-colors disabled:opacity-50 shrink-0"
               >
                 {resendLoading ? 'Sending...' : 'Resend'}
               </button>
@@ -164,7 +164,7 @@ export const LoginPage: React.FC = () => {
         <div className="flex justify-end mb-6">
           <Link
             to="/forgot-password"
-            className="text-xs font-semibold text-gray-500 hover:text-[#fd297b] transition-colors py-1"
+            className="text-xs font-semibold text-brand-muted hover:text-brand-accent transition-colors py-1"
           >
             Forgot password?
           </Link>

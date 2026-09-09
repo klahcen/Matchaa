@@ -121,21 +121,21 @@ export const RegisterPage: React.FC = () => {
         subtitle="We've sent an activation link to your email"
       >
         <div className="flex flex-col items-center text-center py-4">
-          <div className="w-16 h-16 rounded-full bg-rose-50 text-[#fd297b] flex items-center justify-center mb-4">
+          <div className="w-16 h-16 rounded-full bg-brand-bg text-brand-accent flex items-center justify-center mb-4">
             <svg className="w-8 h-8 fill-current" viewBox="0 0 20 20">
               <path d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z" />
               <path d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z" />
             </svg>
           </div>
 
-          <p className="text-gray-700 font-medium mb-2">
+          <p className="text-brand-text font-medium mb-2">
             Verification link sent to:
           </p>
-          <p className="text-sm font-semibold text-[#fd297b] bg-rose-50/70 py-1.5 px-4 rounded-full mb-6 max-w-full truncate">
+          <p className="text-sm font-semibold text-brand-accent bg-brand-bg py-1.5 px-4 rounded-full mb-6 max-w-full truncate border border-brand-border">
             {registeredEmail}
           </p>
 
-          <p className="text-xs text-gray-500 mb-6 leading-relaxed">
+          <p className="text-xs text-brand-muted mb-6 leading-relaxed">
             Please click the link in that email to activate your account. You will not be able to log in until your email address is verified.
           </p>
 
@@ -156,7 +156,7 @@ export const RegisterPage: React.FC = () => {
               type="button"
               onClick={handleResend}
               disabled={resendLoading}
-              className="text-xs font-semibold text-[#fd297b] hover:text-[#ff5864] transition-colors py-1 disabled:opacity-50"
+              className="text-xs font-semibold text-brand-accent hover:text-brand-mid transition-colors py-1 disabled:opacity-50"
             >
               {resendLoading ? 'Sending new link...' : "Didn't receive the email? Resend link"}
             </button>
@@ -171,11 +171,11 @@ export const RegisterPage: React.FC = () => {
       title="Create Account"
       subtitle="Join Matcha today and find your spark"
       footer={
-        <p className="text-sm text-gray-600">
+        <p className="text-sm text-brand-muted">
           Already have an account?{' '}
           <Link
             to="/login"
-            className="font-bold text-[#fd297b] hover:text-[#ff5864] transition-colors inline-block py-1"
+            className="font-bold text-brand-accent hover:text-brand-mid transition-colors inline-block py-1"
           >
             Sign in
           </Link>

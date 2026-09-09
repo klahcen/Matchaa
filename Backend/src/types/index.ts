@@ -21,6 +21,7 @@ export interface User {
   birthdate?: Date | null;
   latitude?: number | null;
   longitude?: number | null;
+  location_text?: string | null;
 
   last_connection: Date;
   created_at: Date;

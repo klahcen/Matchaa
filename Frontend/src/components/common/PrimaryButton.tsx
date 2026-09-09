@@ -22,13 +22,13 @@ export const PrimaryButton: React.FC<PrimaryButtonProps> = ({
   let variantStyles = '';
   if (variant === 'gradient') {
     variantStyles =
-      'text-white bg-gradient-to-r from-[#fd297b] via-[#ff5864] to-[#ff655b] shadow-lg shadow-rose-500/25 hover:shadow-xl hover:shadow-rose-500/35 hover:brightness-105 active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none disabled:shadow-none';
+      'text-white bg-gradient-to-br from-brand-start via-brand-mid to-brand-end shadow-lg shadow-brand-accent/25 hover:shadow-xl hover:shadow-brand-accent/35 hover:brightness-105 active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none disabled:shadow-none';
   } else if (variant === 'outline') {
     variantStyles =
-      'border-2 border-[#fd297b] text-[#fd297b] hover:bg-rose-50 active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none';
+      'border-2 border-brand-accent text-brand-accent hover:bg-brand-bg active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none';
   } else {
     variantStyles =
-      'text-gray-600 hover:text-gray-900 hover:bg-gray-100 active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none';
+      'text-brand-muted hover:text-brand-text hover:bg-brand-bg active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none';
   }
 
   return (
