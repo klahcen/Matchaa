@@ -92,22 +92,6 @@ export class AuthController {
    * Verifies the user's email using the expiring token.
    */
   static async verifyEmail(req: Request, res: Response, next: NextFunction): Promise<void> {
-    // TEMPORARY DEBUG LOGGING — remove once the verify-hang investigation is closed.
-    // The 'finish' listener fires only when a response actually leaves the server,
-    // so seeing "--> received" without a matching "<-- completed" proves this
-    // handler hung; seeing neither proves the request never reached it.
-    if (env.NODE_ENV === 'development') {
-      const startedAt = Date.now();
-      const rawToken = String(req.params.token ?? req.query.token ?? '');
-      console.log(
-        `[verify] --> received token=${rawToken ? `${rawToken.slice(0, 8)}…` : '(missing)'} ` +
-          `accept=${req.headers.accept ?? '-'} xhr=${String(req.xhr)}`
-      );
-      res.on('finish', () => {
-        console.log(`[verify] <-- completed status=${res.statusCode} in ${Date.now() - startedAt}ms`);
-      });
-    }
-
     try {
       const token = (req.query.token as string) || (req.params.token as string);
 

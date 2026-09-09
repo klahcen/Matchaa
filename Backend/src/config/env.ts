@@ -32,6 +32,10 @@ export const env = {
   APP_URL: process.env.APP_URL || 'http://localhost:3000',
   CLIENT_URL: process.env.CLIENT_URL || 'http://localhost:5173',
 
+  // CORS allowed origins (comma-separated). Use '*' for all origins in development,
+  // or specify exact origins like 'https://app.example.com,https://www.example.com' in production.
+  CORS_ORIGIN: process.env.CORS_ORIGIN || '*',
+
   // Paths
   DATA_DIR: path.resolve(__dirname, '../../data'),
   UPLOAD_DIR: process.env.UPLOAD_DIR

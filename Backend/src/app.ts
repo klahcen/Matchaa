@@ -20,7 +20,7 @@ export const createApp = (): Application => {
   // Cross-Origin Resource Sharing
   app.use(
     cors({
-      origin: true, // Allow requesting origin in development
+      origin: env.CORS_ORIGIN === '*' ? true : env.CORS_ORIGIN.split(',').map((o) => o.trim()),
       credentials: true, // Allow cookies to be sent
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization'],

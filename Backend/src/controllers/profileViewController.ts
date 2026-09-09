@@ -206,30 +206,30 @@ export class ProfileViewController {
           // Fame counts DISTINCT viewers, so only a first visit can change it.
           // Skipping the recalculation on repeat visits avoids a pointless write.
           await recalculateFameRating(targetId);
+
+          // Persist notification in DB (only on first view to avoid spam)
+          await createNotification(targetId, 'view', viewerId, `${req.user!.first_name} viewed your profile`);
+
+          // Emit real-time notification via Socket.io
+          const io = getIo();
+          if (io) {
+            io.to(`user:${targetId}`).emit('notification:new', {
+              type: 'view',
+              from_user: { id: viewerId, first_name: req.user!.first_name, username: req.user!.username },
+              content: `${req.user!.first_name} viewed your profile`,
+              created_at: new Date().toISOString(),
+            });
+          }
+
+          pendingNotifications = [
+            {
+              type: 'profile_viewed',
+              for_user_id: targetId,
+              from_user_id: viewerId,
+              delivered: false,
+            },
+          ];
         }
-
-        // Persist notification in DB
-        await createNotification(targetId, 'view', viewerId, `${req.user!.first_name} viewed your profile`);
-
-        // Emit real-time notification via Socket.io
-        const io = getIo();
-        if (io) {
-          io.to(`user:${targetId}`).emit('notification:new', {
-            type: 'view',
-            from_user: { id: viewerId, first_name: req.user!.first_name, username: req.user!.username },
-            content: `${req.user!.first_name} viewed your profile`,
-            created_at: new Date().toISOString(),
-          });
-        }
-
-        pendingNotifications = [
-          {
-            type: 'profile_viewed',
-            for_user_id: targetId,
-            from_user_id: viewerId,
-            delivered: false,
-          },
-        ];
       }
 
       const viewerCanLike = await canViewerLike(viewerId);
