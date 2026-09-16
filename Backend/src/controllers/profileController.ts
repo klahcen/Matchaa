@@ -1,6 +1,7 @@
 import { NextFunction, Response } from 'express';
 import {
   countUserPhotos,
+  getUserPhotos,
   deletePhotoRow,
   findLikesForUser,
   findPhotoById,
@@ -29,24 +30,21 @@ import {
   resolveUploadPath,
   safeUnlink,
 } from '../services/uploadService';
-import { validateEmail, validateName } from '../services/authService';
+import { generateSecureToken, validateEmail, validateName } from '../services/authService';
+import { sendVerificationEmail } from '../services/emailService';
 import { AuthenticatedRequest } from '../types';
 import { AppError } from '../utils/AppError';
 
 /**
  * Allowed values for the profile enums.
  *
- * Gender:      male | female | other
- * Preference:  heterosexual | homosexual | bisexual
- *
- * When sexual_preferences is left unspecified the profile is treated as
- * "bisexual" (the DB column default and the value normalized on read), so
- * later matching logic always has a usable value.
+ * Gender:      male | female
+ * Preference:  male | female (the gender this user wants to see)
  */
-export const ALLOWED_GENDERS = ['male', 'female', 'other'] as const;
-export const ALLOWED_SEXUAL_PREFERENCES = ['heterosexual', 'homosexual', 'bisexual'] as const;
+export const ALLOWED_GENDERS = ['male', 'female'] as const;
+export const ALLOWED_SEXUAL_PREFERENCES = ['male', 'female'] as const;
 
-export const DEFAULT_SEXUAL_PREFERENCE = 'bisexual';
+export const DEFAULT_SEXUAL_PREFERENCE = 'female';
 
 const MAX_BIOGRAPHY_LENGTH = 500;
 const MAX_LOCATION_TEXT_LENGTH = 255;
@@ -192,7 +190,7 @@ const parsePositiveIntParam = (raw: unknown, label: string): number => {
 
 /**
  * Normalizes a profile for the owning user: never leaks password_hash or any
- * token column, and defaults an unspecified sexual preference to "bisexual".
+ * token column.
  *
  * profile_picture_url is strictly the flagged photo — it deliberately does NOT
  * fall back to the first uploaded photo, so that deleting the profile picture
@@ -271,10 +269,14 @@ export class ProfileController {
         if (existing && existing.id !== userId) {
           throw AppError.conflict('An account with this email address already exists');
         }
-        data.email = email;
+        if (email.toLowerCase() !== req.user!.email.toLowerCase()) {
+          data.pendingEmail = email;
+          data.verificationToken = generateSecureToken();
+          data.verificationTokenExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        }
       }
 
-      if (Object.keys(data).length === 0) {
+      if (Object.keys(data).length === 0 && body.email === undefined) {
         throw AppError.badRequest('No updatable fields were provided');
       }
 
@@ -283,13 +285,24 @@ export class ProfileController {
         throw AppError.notFound('Profile not found');
       }
 
+      let message = 'Profile updated successfully';
+      if (data.pendingEmail && data.verificationToken) {
+        try {
+          await sendVerificationEmail(data.pendingEmail, updated.username, data.verificationToken);
+          message = 'Profile updated. Check your new email address to confirm the change.';
+        } catch (error: any) {
+          console.error('[ProfileController] Failed to send email-change verification:', error.message);
+          message = 'Profile updated, but the verification email could not be sent. Submit the new email again to retry.';
+        }
+      }
+
       // Completing the bio (or clearing it) changes the +10 completion bonus.
       const fameRating = await recalculateFameRating(userId);
 
       const profile = await findProfileById(userId);
       res.status(200).json({
         success: true,
-        message: 'Profile updated successfully',
+        message,
         data: profile ? { ...toProfileResponse(profile), fame_rating: fameRating } : undefined,
       });
     } catch (error) {
@@ -558,7 +571,7 @@ export class ProfileController {
 
       // Losing the last photo can drop the +10 completion bonus.
       const fameRating = await recalculateFameRating(userId);
-      const remaining = await countUserPhotos(userId);
+      const remaining = await getUserPhotos(userId);
 
       res.status(200).json({
         success: true,
@@ -568,8 +581,8 @@ export class ProfileController {
         data: {
           deleted_id: photoId,
           was_profile_picture: wasProfilePicture,
-          has_profile_picture: false,
-          photo_count: remaining,
+          has_profile_picture: remaining.some((p) => p.is_profile_picture),
+          photo_count: remaining.length,
           fame_rating: fameRating,
         },
       });

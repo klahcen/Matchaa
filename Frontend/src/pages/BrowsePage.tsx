@@ -232,7 +232,7 @@ export const BrowsePage: React.FC = () => {
                 <p className="text-xs sm:text-sm text-brand-muted mt-0.5">
                   Ranked by proximity, shared interests and fame.
                   {orientation && !orientation.gender_required && (
-                    <> Showing matches for your <span className="font-semibold text-brand-text">{orientation.preference}</span> preference.</>
+                    <> Showing <span className="font-semibold text-brand-text">{orientation.preference}</span> profiles who are also looking for you.</>
                   )}
                 </p>
               </div>

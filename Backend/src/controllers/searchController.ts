@@ -109,29 +109,6 @@ export class SearchController {
         gender_required: orientation.genderRequired,
       };
 
-      // Same short-circuit as Browsing: a gendered preference without the
-      // viewer's own gender cannot be evaluated — zero rows plus an explicit
-      // flag, never a silent widening to bisexual.
-      if (orientation.genderRequired) {
-        res.status(200).json({
-          success: true,
-          data: {
-            results: [],
-            pagination: {
-              page,
-              limit,
-              total: 0,
-              total_pages: 0,
-              has_next: false,
-              has_prev: false,
-            },
-            sort: { by: sortBy, order: sortOrder },
-            orientation: orientationPayload,
-          },
-        });
-        return;
-      }
-
       const { rows, total } = await findSearchResults(
         viewerId,
         filters,

@@ -350,7 +350,7 @@ export const ProfileViewPage: React.FC = () => {
                     <p className="flex items-center gap-2">
                       <VenusAndMars className="w-4 h-4 shrink-0 text-brand-accent" />
                       <span className="text-brand-muted">
-                        {[capitalize(profile.gender), profile.sexual_preferences && `into ${profile.sexual_preferences}`]
+                        {[capitalize(profile.gender), profile.sexual_preferences && `seeking ${profile.sexual_preferences}`]
                           .filter(Boolean)
                           .join(' · ') || '—'}
                       </span>

@@ -85,30 +85,6 @@ export class BrowsingController {
         gender_required: orientation.genderRequired,
       };
 
-      // A heterosexual/homosexual viewer who never set their own gender cannot
-      // be matched by orientation. Return zero rows with an explicit flag so
-      // the UI can prompt them, instead of silently widening the filter to
-      // bisexual (which would show genders they asked to exclude).
-      if (orientation.genderRequired) {
-        res.status(200).json({
-          success: true,
-          data: {
-            suggestions: [],
-            pagination: {
-              page,
-              limit,
-              total: 0,
-              total_pages: 0,
-              has_next: false,
-              has_prev: false,
-            },
-            sort: { by: sortBy, order: sortOrder },
-            orientation: orientationPayload,
-          },
-        });
-        return;
-      }
-
       const { rows, total } = await findSuggestions(
         viewerId,
         filters,

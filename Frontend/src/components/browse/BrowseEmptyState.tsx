@@ -19,8 +19,8 @@ const COPY: Record<EmptyVariant, { title: string; body: string }> = {
     body: 'There is nobody to show you right now. Suggestions appear once other verified members with a photo match your preferences.',
   },
   'gender-required': {
-    title: 'Set your gender to see matches',
-    body: 'You chose a gendered preference, so Matcha needs your own gender to work out who to show you. Nothing has been widened or guessed — add it and your suggestions will appear.',
+    title: 'Complete your profile to see matches',
+    body: 'Matcha needs both your gender and the gender you want to see before it can suggest compatible profiles.',
   },
 };
 

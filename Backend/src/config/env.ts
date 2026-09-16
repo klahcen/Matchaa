@@ -8,6 +8,8 @@ dotenv.config();
 export const env = {
   PORT: Number(process.env.PORT || process.env.APP_PORT || 3000),
   NODE_ENV: process.env.NODE_ENV || 'development',
+  // Explicit proxy IPs/CIDRs only. Empty means direct clients cannot supply their own IP.
+  TRUSTED_PROXIES: (process.env.TRUSTED_PROXIES || '').split(',').map((ip) => ip.trim()).filter(Boolean),
 
   // Database settings
   DB_HOST: process.env.DB_HOST || 'localhost',

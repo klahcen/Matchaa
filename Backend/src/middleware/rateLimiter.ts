@@ -31,10 +31,7 @@ export const createRateLimiter = (options: RateLimiterOptions) => {
   }, 5 * 60 * 1000).unref();
 
   return (req: Request, res: Response, next: NextFunction): void => {
-    const ip =
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ||
-      req.socket.remoteAddress ||
-      'unknown-ip';
+    const ip = req.ip || req.socket.remoteAddress || 'unknown-ip';
 
     const now = Date.now();
     const record = store.get(ip);

@@ -14,8 +14,8 @@ import { notificationRoutes } from './routes/notificationRoutes';
 export const createApp = (): Application => {
   const app = express();
 
-  // Trust proxy headers for accurate client IP resolution (needed for rate limiting)
-  app.set('trust proxy', 1);
+  // Only configured proxy addresses may influence req.ip; direct clients are untrusted.
+  app.set('trust proxy', env.TRUSTED_PROXIES.length ? env.TRUSTED_PROXIES : false);
 
   // Cross-Origin Resource Sharing
   app.use(

@@ -1,6 +1,7 @@
 import { NextFunction, Response } from 'express';
 import { AuthenticatedRequest } from '../types';
 import { AppError } from '../utils/AppError';
+import { parseBoundedInt } from '../utils/queryValidation';
 import {
   getNotifications,
   getUnreadNotificationCount,
@@ -16,10 +17,8 @@ export class NotificationController {
   ): Promise<void> {
     try {
       const userId = req.user!.id;
-      const limitParam = Array.isArray(req.query.limit) ? req.query.limit[0] : req.query.limit;
-      const limit = Math.min(Number.parseInt(limitParam as string) || 30, 100);
-      const offsetParam = Array.isArray(req.query.offset) ? req.query.offset[0] : req.query.offset;
-      const offset = Math.max(Number.parseInt(offsetParam as string) || 0, 0);
+      const limit = req.query.limit === undefined ? 30 : parseBoundedInt(req.query.limit, 'limit', 1, 100);
+      const offset = req.query.offset === undefined ? 0 : parseBoundedInt(req.query.offset, 'offset', 0, Number.MAX_SAFE_INTEGER);
 
       const notifications = await getNotifications(userId, limit, offset);
 

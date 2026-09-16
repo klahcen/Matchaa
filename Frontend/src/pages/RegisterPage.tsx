@@ -6,6 +6,8 @@ import { ErrorBanner } from '../components/common/ErrorBanner';
 import { FormInput } from '../components/common/FormInput';
 import { PrimaryButton } from '../components/common/PrimaryButton';
 
+const USERNAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
 export const RegisterPage: React.FC = () => {
   const [formData, setFormData] = useState({
     email: '',
@@ -37,6 +39,10 @@ export const RegisterPage: React.FC = () => {
       newErrors.username = 'Username is required';
     } else if (formData.username.trim().length < 3) {
       newErrors.username = 'Username must be at least 3 characters';
+    } else if (formData.username.trim().length > 30) {
+      newErrors.username = 'Username must be 30 characters or fewer';
+    } else if (!USERNAME_PATTERN.test(formData.username.trim())) {
+      newErrors.username = 'Use only letters, numbers, underscores, and hyphens';
     }
 
     if (!formData.firstName.trim()) {

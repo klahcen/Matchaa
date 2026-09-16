@@ -182,10 +182,10 @@ export const countViewsBetween = async (viewerId: number, viewedId: number): Pro
   return result.rows[0]?.count ?? 0;
 };
 
-/** True when `userId` has at least one photo (required before they may like). */
-export const userHasAnyPhoto = async (userId: number): Promise<boolean> => {
+/** True when the user has a selected profile picture (required before liking). */
+export const userHasProfilePicture = async (userId: number): Promise<boolean> => {
   const result = await query<{ exists: boolean }>(
-    `SELECT EXISTS(SELECT 1 FROM photos WHERE user_id = $1) AS exists`,
+    `SELECT EXISTS(SELECT 1 FROM photos WHERE user_id = $1 AND is_profile_picture = TRUE) AS exists`,
     [userId]
   );
   return Boolean(result.rows[0]?.exists);

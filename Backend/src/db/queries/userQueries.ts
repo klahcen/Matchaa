@@ -1,5 +1,44 @@
-import { query } from '../../config/db';
+import { pool, query } from '../../config/db';
 import { User } from '../../types';
+import { AppError } from '../../utils/AppError';
+
+/** Verify an email replacement atomically; a superseded/expired token cannot change it. */
+export const confirmPendingEmail = async (userId: number, token: string): Promise<User> => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const locked = await client.query<User>('SELECT * FROM users WHERE id = $1 FOR UPDATE', [userId]);
+    const user = locked.rows[0];
+    if (!user || user.verification_token !== token || !user.verification_token_expires_at ||
+        new Date(user.verification_token_expires_at) <= new Date()) {
+      throw AppError.badRequest('Invalid or expired verification token');
+    }
+    // A concurrent confirmation of the same token may already have completed.
+    if (!user.pending_email) {
+      if (!user.is_verified) throw AppError.badRequest('Invalid or expired verification token');
+      await client.query('COMMIT');
+      return user;
+    }
+    const conflict = await client.query(
+      'SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND id <> $2',
+      [user.pending_email, userId]
+    );
+    if (conflict.rowCount) throw AppError.conflict('An account with this email address already exists');
+    const updated = await client.query<User>(
+      `UPDATE users SET email = pending_email, pending_email = NULL,
+       is_verified = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING *`, [userId]
+    );
+    await client.query('COMMIT');
+    return updated.rows[0];
+  } catch (error: any) {
+    await client.query('ROLLBACK');
+    // The address could be claimed after the conflict check; the unique index is authoritative.
+    if (error.code === '23505') throw AppError.conflict('An account with this email address already exists');
+    throw error;
+  } finally {
+    client.release();
+  }
+};
 
 export interface CreateUserData {
   email: string;
@@ -9,6 +48,8 @@ export interface CreateUserData {
   passwordHash: string;
   verificationToken: string;
   verificationTokenExpiresAt: Date;
+  gender?: 'male' | 'female';
+  sexualPreferences?: 'male' | 'female';
 }
 
 /**
@@ -25,9 +66,11 @@ export const createUser = async (data: CreateUserData): Promise<User> => {
       password_hash,
       verification_token,
       verification_token_expires_at,
+      gender,
+      sexual_preferences,
       is_verified
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, 'male'), COALESCE($9, 'female'), FALSE)
     RETURNING *;
   `;
 
@@ -39,6 +82,8 @@ export const createUser = async (data: CreateUserData): Promise<User> => {
     data.passwordHash,
     data.verificationToken,
     data.verificationTokenExpiresAt,
+    data.gender ?? null,
+    data.sexualPreferences ?? null,
   ];
 
   const result = await query<User>(sql, values);
@@ -229,4 +274,3 @@ export const markUserVerified = verifyUserEmail;
 export const setResetToken = setResetPasswordToken;
 export const updatePassword = updateUserPassword;
 export const updateLastSeen = updateLastConnection;
-

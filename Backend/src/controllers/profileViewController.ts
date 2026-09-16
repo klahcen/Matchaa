@@ -13,12 +13,13 @@ import {
   isUserOnline,
   recordProfileView,
   userExists,
-  userHasAnyPhoto,
+  userHasProfilePicture,
   ONLINE_WINDOW_MINUTES,
   PublicProfile,
   RelationshipState,
 } from '../db/queries/profileViewQueries';
 import { createReport } from '../db/queries/reportQueries';
+import { findUserById } from '../db/queries/userQueries';
 import { recalculateFameRating } from '../services/fameRatingService';
 import { createNotification } from '../db/queries/notificationQueries';
 import { AuthenticatedRequest } from '../types';
@@ -75,16 +76,8 @@ const validateReportReason = (value: unknown): string => {
   return trimmed;
 };
 
-/**
- * Whether the viewer is allowed to like anyone.
- *
- * The subject blocks liking for users with no profile picture. This uses the
- * same rule Browsing uses for candidate visibility — "has at least one photo" —
- * so a user who deleted their flagged profile picture but still has photos is
- * treated consistently in both features. Swap `userHasAnyPhoto` for a
- * flagged-picture check here if you want the stricter literal reading.
- */
-const canViewerLike = (viewerId: number): Promise<boolean> => userHasAnyPhoto(viewerId);
+/** A selected profile picture is required for liking and the viewer-facing flags. */
+const canViewerLike = (viewerId: number): Promise<boolean> => userHasProfilePicture(viewerId);
 
 interface ResolvedTarget {
   viewerId: number;
@@ -156,7 +149,7 @@ const toPublicPayload = (
       can_like: viewerCanLike,
       like_blocked_reason: viewerCanLike
         ? null
-        : 'You need to add at least one photo to your own profile before you can like other members.',
+        : 'You need to select a profile picture on your own profile before you can like other members.',
     },
   };
 };
@@ -187,7 +180,7 @@ export class ProfileViewController {
       // Block check happens BEFORE the profile is fetched and BEFORE any view is
       // logged, so being blocked is indistinguishable from "does not exist".
       const relationship = await findRelationshipState(viewerId, targetId);
-      if (relationship.is_blocked_by) {
+      if (relationship.is_blocked_by || relationship.has_blocked) {
         throw AppError.notFound('This profile does not exist');
       }
 
@@ -264,7 +257,7 @@ export class ProfileViewController {
 
       if (!(await canViewerLike(viewerId))) {
         throw AppError.forbidden(
-          'You need to add at least one photo to your own profile before you can like other members.'
+          'You need to select a profile picture on your own profile before you can like other members.'
         );
       }
 
@@ -295,25 +288,21 @@ export class ProfileViewController {
       let connectionNotifications: any[] = [];
 
       if (nowConnected) {
-        // Persist and emit 'new_connection' notification for BOTH users
-        await createNotification(viewerId, 'new_connection', targetId, `You and ${req.user!.first_name} liked each other — you are now connected!`);
-        await createNotification(targetId, 'new_connection', viewerId, `You and ${req.user!.first_name} liked each other — you are now connected!`);
-
-        if (io) {
-          io.to(`user:${viewerId}`).emit('notification:new', {
-            type: 'new_connection',
-            from_user: { id: targetId, first_name: req.user!.first_name, username: req.user!.username },
-            with_user_id: targetId,
-            content: `You and ${req.user!.first_name} liked each other — you are now connected!`,
-            created_at: new Date().toISOString(),
-          });
-          io.to(`user:${targetId}`).emit('notification:new', {
-            type: 'new_connection',
-            from_user: { id: viewerId, first_name: req.user!.first_name, username: req.user!.username },
-            with_user_id: viewerId,
-            content: `You and ${req.user!.first_name} liked each other — you are now connected!`,
-            created_at: new Date().toISOString(),
-          });
+        const target = await findUserById(targetId);
+        if (!target) throw AppError.notFound('This profile does not exist');
+        // Each recipient sees their counterpart in both the stored row and socket payload.
+        for (const [recipientId, counterpart] of [[viewerId, target], [targetId, req.user!]] as const) {
+          const content = `You and ${counterpart.first_name} liked each other — you are now connected!`;
+          await createNotification(recipientId, 'new_connection', counterpart.id, content);
+          if (io) {
+            io.to(`user:${recipientId}`).emit('notification:new', {
+              type: 'new_connection',
+              from_user: { id: counterpart.id, first_name: counterpart.first_name, username: counterpart.username },
+              with_user_id: counterpart.id,
+              content,
+              created_at: new Date().toISOString(),
+            });
+          }
         }
 
         connectionNotifications = [

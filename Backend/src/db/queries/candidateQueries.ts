@@ -6,15 +6,14 @@ import { buildGeoSignalsSql } from '../../services/matchScoringService';
  *
  * This module owns every discovery rule that must behave identically in both
  * features (extracted from browsingQueries.ts so the two can never drift):
- *   - the viewer CTE (gender / effective preference / coordinates)
+ *   - the viewer CTE (gender / preference / coordinates)
  *   - the hard exclusions in `base`: never the viewer themself, verified
  *     accounts only, at least one photo, blocks excluded in BOTH directions,
- *     and sexual-orientation compatibility (unspecified preference defaults
- *     to bisexual; NULL gender fails gendered comparisons)
+ *     and binary gender preference compatibility
  *   - the shared column set: age, geo signals, shared tags, profile photo
  *   - the user filter clauses: age range, fame range, location partial match,
  *     tag match (ANY by default, ALL optional)
- *   - getViewerOrientation + the "gender required" rule
+ *   - getViewerOrientation
  *
  * What is NOT shared (feature-specific, lives in each feature's own module):
  *   - Browsing: the `scored` CTE (relevance formula) and relevance sorting
@@ -80,21 +79,13 @@ export interface CandidateRow {
 
 export interface ViewerOrientation {
   id: number;
-  gender: string | null;
-  /** Effective preference after applying the "unspecified = bisexual" rule. */
-  preference: 'heterosexual' | 'homosexual' | 'bisexual';
-  /**
-   * True when a gendered preference cannot be evaluated because the viewer has
-   * not set their own gender. Controllers return zero rows plus this flag
-   * rather than silently widening the filter to bisexual.
-   */
-  genderRequired: boolean;
+  gender: 'male' | 'female';
+  /** The gender this viewer wants to see. */
+  preference: 'male' | 'female';
+  /** Retained in the response contract; always false under the binary model. */
+  genderRequired: false;
 }
 
-/**
- * Resolves the viewer's effective orientation, applying the documented default
- * (unspecified sexual preference => bisexual).
- */
 export const getViewerOrientation = async (viewerId: number): Promise<ViewerOrientation | null> => {
   const result = await query<{ gender: string | null; sexual_preferences: string | null }>(
     `SELECT gender, sexual_preferences FROM users WHERE id = $1 LIMIT 1`,
@@ -103,18 +94,14 @@ export const getViewerOrientation = async (viewerId: number): Promise<ViewerOrie
   const row = result.rows[0];
   if (!row) return null;
 
-  const raw = (row.sexual_preferences ?? '').trim().toLowerCase();
-  const preference: ViewerOrientation['preference'] =
-    raw === 'heterosexual' || raw === 'homosexual' ? raw : 'bisexual';
-
-  const gender = (row.gender ?? '').trim().toLowerCase() || null;
+  const gender = row.gender === 'female' ? 'female' : 'male';
+  const preference = row.sexual_preferences === 'male' ? 'male' : 'female';
 
   return {
     id: viewerId,
     gender,
     preference,
-    // A gendered preference needs the viewer's own gender to be meaningful.
-    genderRequired: preference !== 'bisexual' && gender === null,
+    genderRequired: false,
   };
 };
 
@@ -145,7 +132,7 @@ export const buildCandidateCte = (viewerId: number): CandidateCte => {
   const sql = `
     WITH viewer AS (
       SELECT id, gender,
-             COALESCE(NULLIF(LOWER(BTRIM(sexual_preferences)), ''), 'bisexual') AS preference,
+             sexual_preferences AS preference,
              latitude, longitude, location_text
       FROM users
       WHERE id = $1
@@ -189,21 +176,10 @@ export const buildCandidateCte = (viewerId: number): CandidateCte => {
         -- Exclude blocks in BOTH directions.
         AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.blocker_id = v.id AND b.blocked_id = u.id)
         AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.blocker_id = u.id AND b.blocked_id = v.id)
-        -- Orientation filter, enforced here so excluded profiles are never
-        -- returned by the API at all (not merely hidden by the frontend).
-        --   bisexual     -> any gender (including candidates with none set)
-        --   heterosexual -> candidate gender must DIFFER from the viewer's
-        --   homosexual   -> candidate gender must MATCH the viewer's
-        -- A NULL on either side fails the comparison, so gendered viewers never
-        -- see candidates of unknown gender, and a viewer with no gender set gets
-        -- zero rows (controllers short-circuit that case with a clear flag).
-        AND (
-          v.preference = 'bisexual'
-          OR (v.preference = 'heterosexual' AND v.gender IS NOT NULL
-                AND u.gender IS NOT NULL AND u.gender <> v.gender)
-          OR (v.preference = 'homosexual'   AND v.gender IS NOT NULL
-                AND u.gender IS NOT NULL AND u.gender =  v.gender)
-        )
+        -- Binary mutual preference filter:
+        -- I see users whose gender matches my preference, and who also want my gender.
+        AND u.gender::text = v.preference::text
+        AND u.sexual_preferences::text = v.gender::text
     ),
     candidates AS (
       SELECT b.*,

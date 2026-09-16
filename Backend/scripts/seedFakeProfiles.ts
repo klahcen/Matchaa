@@ -70,20 +70,80 @@ const FETCH_TIMEOUT_MS = 20_000;
 
 // Two queries per gender; page 2 is fetched only when page 1 is not enough.
 const PEXELS_QUERIES: Record<'male' | 'female', string[]> = {
-  male: ['man portrait face', 'smiling man portrait'],
-  female: ['woman portrait face', 'smiling woman portrait'],
+  male: ['Moroccan man portrait', 'North African man portrait'],
+  female: ['Moroccan woman portrait', 'North African woman portrait'],
 };
 
 const TAG_POOL = [
-  'travel', 'coffee', 'fitness', 'music', 'hiking', 'cooking', 'photography',
-  'reading', 'gaming', 'yoga', 'cinema', 'football', 'swimming', 'dancing',
-  'vegan', 'geek', 'painting', 'running', 'sushi', 'camping',
+  'coffee', 'atay', 'football', 'raja', 'wydad', 'gnawa', 'rai', 'andalusi',
+  'chaabi', 'cooking', 'tagine', 'couscous', 'harira', 'travel', 'surfing',
+  'hiking', 'atlas', 'beach', 'cinema', 'photography', 'reading', 'fitness',
+  'running', 'yoga', 'gaming', 'volunteering', 'languages', 'startups',
+  'architecture', 'history',
 ];
 
-const LOCATIONS = [
-  'Maârif, Casablanca', 'Gauthier, Casablanca', 'Anfa, Casablanca',
-  'Hay Hassani, Casablanca', 'Ain Diab, Casablanca', 'Casablanca',
-  'Rabat', 'Marrakesh', 'Mohammedia',
+interface MoroccanLocation {
+  text: string;
+  latitude: number;
+  longitude: number;
+}
+
+const MOROCCAN_LOCATIONS: MoroccanLocation[] = [
+  { text: 'Maarif, Casablanca', latitude: 33.5869, longitude: -7.6377 },
+  { text: 'Gauthier, Casablanca', latitude: 33.5909, longitude: -7.6305 },
+  { text: 'Anfa, Casablanca', latitude: 33.5944, longitude: -7.6608 },
+  { text: 'Ain Diab, Casablanca', latitude: 33.5915, longitude: -7.6906 },
+  { text: 'Hay Hassani, Casablanca', latitude: 33.5638, longitude: -7.6812 },
+  { text: 'Sidi Maarouf, Casablanca', latitude: 33.5229, longitude: -7.6477 },
+  { text: 'Agdal, Rabat', latitude: 34.0023, longitude: -6.8501 },
+  { text: 'Hassan, Rabat', latitude: 34.0224, longitude: -6.8325 },
+  { text: 'Hay Riad, Rabat', latitude: 33.9532, longitude: -6.8682 },
+  { text: 'Gueliz, Marrakech', latitude: 31.6342, longitude: -8.0107 },
+  { text: 'Medina, Marrakech', latitude: 31.6295, longitude: -7.9811 },
+  { text: 'Ville Nouvelle, Fes', latitude: 34.0372, longitude: -5.0036 },
+  { text: 'Medina, Fes', latitude: 34.0611, longitude: -4.9777 },
+  { text: 'Malabata, Tangier', latitude: 35.7806, longitude: -5.7834 },
+  { text: 'Iberia, Tangier', latitude: 35.7736, longitude: -5.8136 },
+  { text: 'Agadir Bay, Agadir', latitude: 30.4074, longitude: -9.5995 },
+  { text: 'Talborjt, Agadir', latitude: 30.4241, longitude: -9.5945 },
+  { text: 'Centre Ville, Meknes', latitude: 33.8955, longitude: -5.5473 },
+  { text: 'Oujda Centre, Oujda', latitude: 34.6814, longitude: -1.9086 },
+  { text: 'Mohammedia Centre, Mohammedia', latitude: 33.6861, longitude: -7.3829 },
+];
+
+type Gender = 'male' | 'female';
+
+const MOROCCAN_FIRST_NAMES: Record<Gender, string[]> = {
+  male: [
+    'Youssef', 'Amine', 'Mehdi', 'Hamza', 'Omar', 'Ayoub', 'Anas', 'Ilyas',
+    'Adam', 'Reda', 'Karim', 'Sofiane', 'Nabil', 'Hicham', 'Taha', 'Othmane',
+    'Zakaria', 'Ismail', 'Rayan', 'Soufiane',
+  ],
+  female: [
+    'Sara', 'Aya', 'Imane', 'Salma', 'Nour', 'Meryem', 'Khadija', 'Hajar',
+    'Fatima Zahra', 'Ghita', 'Rania', 'Wiam', 'Lina', 'Malak', 'Soukaina',
+    'Zineb', 'Houda', 'Asmae', 'Nadia', 'Yasmine',
+  ],
+};
+
+const MOROCCAN_LAST_NAMES = [
+  'El Amrani', 'Bennani', 'Alaoui', 'El Fassi', 'Berrada', 'Tazi',
+  'Idrissi', 'Belkadi', 'Mansouri', 'Cherkaoui', 'Lahlou', 'Benali',
+  'Ouazzani', 'Hassani', 'El Khattabi', 'Bouzid', 'Amrani', 'Raji',
+  'Lamrani', 'Sabri', 'El Mansouri', 'Ziani', 'Bennis', 'Bouras',
+];
+
+const MOROCCAN_BIO_TEMPLATES = [
+  'I am happiest over atay, good conversation, and a walk by the sea.',
+  'Weekdays are for work, weekends are for family, friends, and discovering new places.',
+  'Always ready for a calm cafe, live music, or a quick trip outside the city.',
+  'I like simple plans: good food, honest laughs, and people who keep their word.',
+  'Football, road trips, and homemade couscous can fix almost any week.',
+  'Looking for someone kind, curious, and ready to build something serious slowly.',
+  'I love medina walks, sunset photos, and trying the best small restaurants in town.',
+  'Big fan of Moroccan music, quiet evenings, and spontaneous beach days.',
+  'I work hard, stay close to family, and appreciate people with good energy.',
+  'Coffee after work, Sunday tagine, and a little adventure whenever possible.',
 ];
 
 interface PoolPhoto {
@@ -96,8 +156,6 @@ interface PoolCache {
   fetchedAt: string;
   photos: PoolPhoto[];
 }
-
-type Gender = 'male' | 'female' | 'other';
 
 interface SeedSpec {
   index: number;
@@ -180,12 +238,12 @@ const pexelsSearch = async (searchQuery: string, page: number, gender: 'male' | 
     .map((photo) => ({ id: photo.id, url: photo.src!.medium!, gender }));
 };
 
-const loadPoolCache = (): PoolCache | null => {
+const loadPoolCache = (allowStale = false): PoolCache | null => {
   try {
     if (!fs.existsSync(POOL_CACHE_PATH)) return null;
     const cache = JSON.parse(fs.readFileSync(POOL_CACHE_PATH, 'utf8')) as PoolCache;
     if (!Array.isArray(cache.photos) || !cache.fetchedAt) return null;
-    if (Date.now() - new Date(cache.fetchedAt).getTime() > POOL_CACHE_MAX_AGE_MS) return null;
+    if (!allowStale && Date.now() - new Date(cache.fetchedAt).getTime() > POOL_CACHE_MAX_AGE_MS) return null;
     return cache;
   } catch {
     return null; // corrupt cache — just refetch
@@ -209,17 +267,19 @@ const savePoolCache = (photos: PoolPhoto[]): void => {
  */
 const buildPhotoPool = async (neededPerGender: number, freshPool: boolean): Promise<PoolPhoto[]> => {
   if (!freshPool) {
-    const cache = loadPoolCache();
+    const cache = loadPoolCache(!env.PEXELS_API_KEY);
     if (cache) {
       const male = cache.photos.filter((p) => p.gender === 'male').length;
       const female = cache.photos.filter((p) => p.gender === 'female').length;
-      console.log(`[Seed] Reusing cached Pexels pool (${male} male / ${female} female urls, fetched ${cache.fetchedAt}).`);
+      const ageMs = Date.now() - new Date(cache.fetchedAt).getTime();
+      const staleNote = ageMs > POOL_CACHE_MAX_AGE_MS ? ' stale' : '';
+      console.log(`[Seed] Reusing${staleNote} cached Pexels pool (${male} male / ${female} female urls, fetched ${cache.fetchedAt}).`);
       return cache.photos;
     }
   }
 
   if (!env.PEXELS_API_KEY) {
-    console.warn('[Seed] Warning: PEXELS_API_KEY is not set in Backend/.env — seeding WITHOUT photos.');
+    console.warn('[Seed] Warning: PEXELS_API_KEY is not set and no cached Pexels pool is available — seeding WITHOUT photos.');
     return [];
   }
 
@@ -346,10 +406,7 @@ const downloadAll = async (specs: SeedSpec[]): Promise<Map<number, string | null
 // ------------------------------ User building -------------------------------
 
 const pickGender = (): Gender => {
-  const roll = Math.random();
-  if (roll < 0.45) return 'female';
-  if (roll < 0.9) return 'male';
-  return 'other';
+  return Math.random() < 0.5 ? 'female' : 'male';
 };
 
 const pickLastConnection = (): Date => {
@@ -360,15 +417,32 @@ const pickLastConnection = (): Date => {
   return faker.date.recent({ days: 10 });
 };
 
+const pickMoroccanLocation = (): {
+  locationText: string;
+  latitude: number | null;
+  longitude: number | null;
+} => {
+  const location = faker.helpers.arrayElement(MOROCCAN_LOCATIONS);
+  const hasCoords = Math.random() < 0.85; // keep some text-only fallback cases
+
+  return {
+    locationText: location.text,
+    latitude: hasCoords ? Number((location.latitude + faker.number.float({ min: -0.018, max: 0.018 })).toFixed(6)) : null,
+    longitude: hasCoords ? Number((location.longitude + faker.number.float({ min: -0.018, max: 0.018 })).toFixed(6)) : null,
+  };
+};
+
+const pickMoroccanBio = (): string =>
+  faker.helpers.arrayElement(MOROCCAN_BIO_TEMPLATES);
+
 const buildSpecs = (count: number, pool: PoolPhoto[]): SeedSpec[] => {
   // Shuffle per-gender pools so photo assignment looks random run to run.
   const femalePool = faker.helpers.shuffle(pool.filter((p) => p.gender === 'female'));
   const malePool = faker.helpers.shuffle(pool.filter((p) => p.gender === 'male'));
-  const otherPool = faker.helpers.shuffle([...femalePool, ...malePool]);
-  const cursors = { female: 0, male: 0, other: 0 };
+  const cursors = { female: 0, male: 0 };
 
   const nextPhoto = (gender: Gender): PoolPhoto | null => {
-    const source = gender === 'female' ? femalePool : gender === 'male' ? malePool : otherPool;
+    const source = gender === 'female' ? femalePool : malePool;
     if (cursors[gender] >= source.length) {
       if (source.length === 0) return null;
       cursors[gender] = 0; // pool exhausted: recycle (documented trade-off)
@@ -382,25 +456,21 @@ const buildSpecs = (count: number, pool: PoolPhoto[]): SeedSpec[] => {
   for (let i = 1; i <= count; i += 1) {
     const gender = pickGender();
     const username = `seed_user_${String(i).padStart(4, '0')}`;
-    const hasCoords = Math.random() < 0.8; // 20% rely on location_text only (geo fallback cases)
+    const location = pickMoroccanLocation();
 
     specs.push({
       index: i,
       username,
       email: `${username}@matcha.seed`,
-      firstName: gender === 'male' ? faker.person.firstName('male') : faker.person.firstName('female'),
-      lastName: faker.person.lastName(),
+      firstName: faker.helpers.arrayElement(MOROCCAN_FIRST_NAMES[gender]),
+      lastName: faker.helpers.arrayElement(MOROCCAN_LAST_NAMES),
       gender,
-      sexualPreferences: faker.helpers.weightedArrayElement([
-        { weight: 60, value: 'heterosexual' },
-        { weight: 20, value: 'homosexual' },
-        { weight: 20, value: 'bisexual' },
-      ]),
+      sexualPreferences: gender === 'male' ? 'female' : 'male',
       birthdate: faker.date.birthdate({ min: 21, max: 48, mode: 'age' }).toISOString().slice(0, 10),
-      biography: Math.random() < 0.9 ? faker.lorem.sentences({ min: 1, max: 3 }) : null,
-      latitude: hasCoords ? Number((33.53 + Math.random() * 0.12).toFixed(6)) : null,   // Casablanca area
-      longitude: hasCoords ? Number((-7.66 + Math.random() * 0.14).toFixed(6)) : null,
-      locationText: faker.helpers.arrayElement(LOCATIONS),
+      biography: pickMoroccanBio(),
+      latitude: location.latitude,
+      longitude: location.longitude,
+      locationText: location.locationText,
       lastConnection: pickLastConnection(),
       tags: faker.helpers.arrayElements(TAG_POOL, { min: 2, max: 5 }),
       photo: nextPhoto(gender),
@@ -478,7 +548,10 @@ async function main(): Promise<void> {
     const specs = buildSpecs(args.count, photoPool);
     const withoutPhoto = specs.filter((spec) => spec.photo === null).length;
     if (!args.noPhotos && withoutPhoto > 0) {
-      console.warn(`[Seed] Warning: the pool was too small for ${withoutPhoto} profile(s) — they will have no photo.`);
+      console.warn(
+        `[Seed] Warning: the Pexels pool was too small for ${withoutPhoto} profile(s) — ` +
+        'those profiles will not get a photo.'
+      );
     }
 
     // 2. Downloads (CDN, throttled) before any DB writes so failures are known early.

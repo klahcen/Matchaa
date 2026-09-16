@@ -50,13 +50,9 @@ export interface BrowsePagination {
 }
 
 export interface OrientationContext {
-  preference: 'heterosexual' | 'homosexual' | 'bisexual';
-  gender: string | null;
-  /**
-   * True when a heterosexual/homosexual viewer has not set their own gender, so
-   * orientation cannot be evaluated. The API returns zero rows plus this flag
-   * rather than silently widening the filter to bisexual.
-   */
+  preference: 'male' | 'female';
+  gender: 'male' | 'female';
+  /** Always false under the binary required gender/preference model. */
   gender_required: boolean;
 }
 

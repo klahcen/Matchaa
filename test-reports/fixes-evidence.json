@@ -1,0 +1,384 @@
+{
+  "results": [
+    {
+      "name": "F3",
+      "status": "PASS",
+      "evidence": {
+        "forward": {
+          "status": 404,
+          "body": {
+            "success": false,
+            "message": "This profile does not exist"
+          }
+        },
+        "reverse": {
+          "status": 404,
+          "body": {
+            "success": false,
+            "message": "This profile does not exist"
+          }
+        },
+        "views": 0,
+        "notifications": 0
+      }
+    },
+    {
+      "name": "F5",
+      "status": "PASS",
+      "evidence": [
+        {
+          "route": "login",
+          "statuses": [
+            401,
+            401,
+            401,
+            401,
+            401,
+            401,
+            401,
+            401,
+            401,
+            401,
+            429,
+            429
+          ]
+        },
+        {
+          "route": "register",
+          "statuses": [
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            400,
+            429,
+            429
+          ]
+        },
+        {
+          "route": "forgot-password",
+          "statuses": [
+            400,
+            400,
+            400,
+            400,
+            400,
+            429,
+            429
+          ]
+        },
+        {
+          "route": "resend-verification",
+          "statuses": [
+            400,
+            400,
+            400,
+            400,
+            400,
+            429,
+            429
+          ]
+        }
+      ]
+    },
+    {
+      "name": "F1",
+      "status": "PASS",
+      "evidence": {
+        "updates": [
+          {
+            "preference": "heterosexual",
+            "status": 200
+          },
+          {
+            "preference": "homosexual",
+            "status": 200
+          },
+          {
+            "preference": "bisexual",
+            "status": 200
+          }
+        ],
+        "unsetMatching": "NULL and empty string include either gender in browse and search"
+      }
+    },
+    {
+      "name": "F2",
+      "status": "PASS",
+      "evidence": {
+        "rejected": {
+          "status": 403,
+          "body": {
+            "success": false,
+            "message": "You need to select a profile picture on your own profile before you can like other members."
+          }
+        },
+        "viewer": {
+          "has_profile_picture": false,
+          "can_like": false,
+          "like_blocked_reason": "You need to select a profile picture on your own profile before you can like other members."
+        },
+        "selectedPictureStatus": 201
+      }
+    },
+    {
+      "name": "F4",
+      "status": "PASS",
+      "evidence": {
+        "unrelatedPhoto": {
+          "status": 200,
+          "body": {
+            "success": true,
+            "message": "Photo deleted",
+            "data": {
+              "deleted_id": 20,
+              "was_profile_picture": false,
+              "has_profile_picture": true,
+              "photo_count": 1,
+              "fame_rating": 0
+            }
+          }
+        },
+        "selectedPhoto": {
+          "status": 200,
+          "body": {
+            "success": true,
+            "message": "Photo deleted. No profile picture is set — choose one from your remaining photos.",
+            "data": {
+              "deleted_id": 19,
+              "was_profile_picture": true,
+              "has_profile_picture": false,
+              "photo_count": 0,
+              "fame_rating": 0
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "F6",
+      "status": "PASS",
+      "evidence": {
+        "pendingStatus": 200,
+        "oldEmailStillActive": "fix1789517934936a@example.invalid",
+        "pendingEmail": "fix1789517934936new@example.invalid",
+        "verifiedWhilePending": true,
+        "confirmation": 200,
+        "active": {
+          "email": "fix1789517934936new@example.invalid",
+          "pending_email": null,
+          "is_verified": true
+        },
+        "expiredAndSupersededTokens": 400,
+        "conflict": {
+          "status": 409,
+          "body": {
+            "success": false,
+            "message": "An account with this email address already exists"
+          }
+        }
+      }
+    },
+    {
+      "name": "F7",
+      "status": "PASS",
+      "evidence": [
+        {
+          "path": "/notifications",
+          "limit": "-1",
+          "status": 400,
+          "body": {
+            "success": false,
+            "message": "limit must be between 1 and 100 (got -1)"
+          }
+        },
+        {
+          "path": "/notifications",
+          "limit": "0",
+          "status": 400,
+          "body": {
+            "success": false,
+            "message": "limit must be between 1 and 100 (got 0)"
+          }
+        },
+        {
+          "path": "/notifications",
+          "limit": "101",
+          "status": 400,
+          "body": {
+            "success": false,
+            "message": "limit must be between 1 and 100 (got 101)"
+          }
+        },
+        {
+          "path": "/notifications",
+          "limit": "1.5",
+          "status": 400,
+          "body": {
+            "success": false,
+            "message": "limit must be a whole number (got \"1.5\")"
+          }
+        },
+        {
+          "path": "/notifications",
+          "limit": "abc",
+          "status": 400,
+          "body": {
+            "success": false,
+            "message": "limit must be a whole number (got \"abc\")"
+          }
+        },
+        {
+          "path": "/notifications",
+          "limit": "1abc",
+          "status": 400,
+          "body": {
+            "success": false,
+            "message": "limit must be a whole number (got \"1abc\")"
+          }
+        },
+        {
+          "path": "/notifications",
+          "limit": "",
+          "status": 400,
+          "body": {
+            "success": false,
+            "message": "limit is required"
+          }
+        },
+        {
+          "path": "/notifications",
+          "limit": "1&limit=2",
+          "status": 400,
+          "body": {
+            "success": false,
+            "message": "limit is required"
+          }
+        },
+        {
+          "path": "/chat/23/messages",
+          "limit": "-1",
+          "status": 400,
+          "body": {
+            "success": false,
+            "message": "limit must be between 1 and 100 (got -1)"
+          }
+        },
+        {
+          "path": "/chat/23/messages",
+          "limit": "0",
+          "status": 400,
+          "body": {
+            "success": false,
+            "message": "limit must be between 1 and 100 (got 0)"
+          }
+        },
+        {
+          "path": "/chat/23/messages",
+          "limit": "101",
+          "status": 400,
+          "body": {
+            "success": false,
+            "message": "limit must be between 1 and 100 (got 101)"
+          }
+        },
+        {
+          "path": "/chat/23/messages",
+          "limit": "1.5",
+          "status": 400,
+          "body": {
+            "success": false,
+            "message": "limit must be a whole number (got \"1.5\")"
+          }
+        },
+        {
+          "path": "/chat/23/messages",
+          "limit": "abc",
+          "status": 400,
+          "body": {
+            "success": false,
+            "message": "limit must be a whole number (got \"abc\")"
+          }
+        },
+        {
+          "path": "/chat/23/messages",
+          "limit": "1abc",
+          "status": 400,
+          "body": {
+            "success": false,
+            "message": "limit must be a whole number (got \"1abc\")"
+          }
+        },
+        {
+          "path": "/chat/23/messages",
+          "limit": "",
+          "status": 400,
+          "body": {
+            "success": false,
+            "message": "limit is required"
+          }
+        },
+        {
+          "path": "/chat/23/messages",
+          "limit": "1&limit=2",
+          "status": 400,
+          "body": {
+            "success": false,
+            "message": "limit is required"
+          }
+        }
+      ]
+    },
+    {
+      "name": "F8",
+      "status": "PASS",
+      "evidence": [
+        {
+          "recipient": "Alice",
+          "event": {
+            "type": "new_connection",
+            "from_user": {
+              "id": 23,
+              "first_name": "Bob",
+              "username": "fix1789517934936b"
+            },
+            "with_user_id": 23,
+            "content": "You and Bob liked each other — you are now connected!",
+            "created_at": "2026-09-16T00:18:56.533Z"
+          },
+          "database": {
+            "related_user_id": 23,
+            "content": "You and Bob liked each other — you are now connected!"
+          }
+        },
+        {
+          "recipient": "Bob",
+          "event": {
+            "type": "new_connection",
+            "from_user": {
+              "id": 22,
+              "first_name": "Alice",
+              "username": "fix1789517934936a"
+            },
+            "with_user_id": 22,
+            "content": "You and Alice liked each other — you are now connected!",
+            "created_at": "2026-09-16T00:18:56.529Z"
+          },
+          "database": {
+            "related_user_id": 22,
+            "content": "You and Alice liked each other — you are now connected!"
+          }
+        }
+      ]
+    }
+  ],
+  "cleanedUserIds": [
+    22,
+    23
+  ]
+}

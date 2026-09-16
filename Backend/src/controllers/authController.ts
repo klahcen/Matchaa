@@ -2,6 +2,7 @@ import { NextFunction, Request, Response } from 'express';
 import { env } from '../config/env';
 import {
   createUser,
+  confirmPendingEmail,
   findConflictingUser,
   findUserByEmail,
   findUserByResetToken,
@@ -67,6 +68,8 @@ export class AuthController {
         passwordHash,
         verificationToken,
         verificationTokenExpiresAt,
+        gender: dto.gender,
+        sexualPreferences: dto.sexualPreferences,
       });
 
       // Send verification email asynchronously without failing registration on delivery error
@@ -108,6 +111,16 @@ export class AuthController {
       const user = await findUserByVerificationToken(token.trim());
       if (!user) {
         throw AppError.badRequest('Invalid or expired verification token');
+      }
+
+      if (user.pending_email) {
+        const verifiedUser = await confirmPendingEmail(user.id, token.trim());
+        res.status(200).json({
+          success: true,
+          message: 'Your new email address has been verified and is now active.',
+          user: toSafeUser(verifiedUser),
+        });
+        return;
       }
 
       if (user.is_verified) {

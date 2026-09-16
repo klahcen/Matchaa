@@ -2,9 +2,20 @@
 -- Matches backend/migrations/001_init.sql + backend/migrations/002_profile.sql
 -- Safe to re-run: every statement is idempotent.
 
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_gender') THEN
+    CREATE TYPE user_gender AS ENUM ('male', 'female');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_sexual_preference') THEN
+    CREATE TYPE user_sexual_preference AS ENUM ('male', 'female');
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     email VARCHAR(255) NOT NULL UNIQUE,
+    pending_email VARCHAR(255) DEFAULT NULL,
     username VARCHAR(50) NOT NULL UNIQUE,
     first_name VARCHAR(50) NOT NULL,
     last_name VARCHAR(50) NOT NULL,
@@ -16,8 +27,8 @@ CREATE TABLE IF NOT EXISTS users (
     reset_token_expires_at TIMESTAMPTZ DEFAULT NULL,
 
     -- Profile fields
-    gender VARCHAR(20) DEFAULT NULL,
-    sexual_preferences VARCHAR(20) DEFAULT 'bisexual',
+    gender user_gender NOT NULL DEFAULT 'male',
+    sexual_preferences user_sexual_preference NOT NULL DEFAULT 'female',
     biography TEXT DEFAULT NULL,
     fame_rating INT NOT NULL DEFAULT 0,
     birthdate DATE DEFAULT NULL,

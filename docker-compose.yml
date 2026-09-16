@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-132456789}
       POSTGRES_DB: matcha_db
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql
       - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
@@ -58,6 +58,9 @@ services:
     restart: unless-stopped
     env_file:
       - ./backend/.env
+    environment:
+      DB_HOST: matcha-pg
+      DB_PORT: 5432
     ports:
       - "3000:3000"
     depends_on:

@@ -3,6 +3,7 @@ import { Request } from 'express';
 export interface User {
   id: number;
   email: string;
+  pending_email?: string | null;
   username: string;
   first_name: string;
   last_name: string;
@@ -43,6 +44,8 @@ export interface RegisterDTO {
   firstName: string;
   lastName: string;
   password: string;
+  gender?: 'male' | 'female';
+  sexualPreferences?: 'male' | 'female';
 }
 
 export interface LoginDTO {

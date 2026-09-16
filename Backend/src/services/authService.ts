@@ -167,6 +167,21 @@ export const validatePassword = (password: unknown): string => {
   return password;
 };
 
+const validateOptionalBinaryGender = (
+  value: unknown,
+  fieldName: 'Gender' | 'Sexual preference'
+): 'male' | 'female' | undefined => {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !value.trim()) {
+    throw AppError.badRequest(`${fieldName} must be either male or female`);
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized !== 'male' && normalized !== 'female') {
+    throw AppError.badRequest(`${fieldName} must be either male or female`);
+  }
+  return normalized;
+};
+
 /**
  * Manual Registration DTO Validator
  * Supports camelCase (firstName, lastName) and snake_case (first_name, last_name).
@@ -181,8 +196,13 @@ export const validateRegistrationDTO = (body: any): RegisterDTO => {
   const firstName = validateName(body.firstName ?? body.first_name, 'First name');
   const lastName = validateName(body.lastName ?? body.last_name, 'Last name');
   const password = validatePassword(body.password);
+  const gender = validateOptionalBinaryGender(body.gender, 'Gender');
+  const sexualPreferences = validateOptionalBinaryGender(
+    body.sexual_preferences ?? body.sexualPreference ?? body.sexualPreferences,
+    'Sexual preference'
+  );
 
-  return { email, username, firstName, lastName, password };
+  return { email, username, firstName, lastName, password, gender, sexualPreferences };
 };
 
 /**

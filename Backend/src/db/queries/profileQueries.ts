@@ -19,6 +19,7 @@ export interface PhotoRow {
 export interface FullProfile {
   id: number;
   email: string;
+  pending_email: string | null;
   username: string;
   first_name: string;
   last_name: string;
@@ -61,7 +62,9 @@ export interface ProfileUpdateData {
   biography?: string | null;
   firstName?: string;
   lastName?: string;
-  email?: string;
+  pendingEmail?: string;
+  verificationToken?: string;
+  verificationTokenExpiresAt?: Date;
   birthdate?: Date | null;
   locationLat?: number | null;
   locationLng?: number | null;
@@ -76,7 +79,7 @@ export interface ProfileUpdateData {
 export const findProfileById = async (userId: number): Promise<FullProfile | null> => {
   const sql = `
     SELECT
-      u.id, u.email, u.username, u.first_name, u.last_name, u.is_verified,
+      u.id, u.email, u.pending_email, u.username, u.first_name, u.last_name, u.is_verified,
       u.gender, u.sexual_preferences, u.biography, u.fame_rating, u.birthdate,
       u.latitude, u.longitude, u.location_text,
       u.last_connection, u.created_at, u.updated_at,
@@ -109,6 +112,7 @@ export const findProfileById = async (userId: number): Promise<FullProfile | nul
   return {
     id: row.id,
     email: row.email,
+    pending_email: row.pending_email,
     username: row.username,
     first_name: row.first_name,
     last_name: row.last_name,
@@ -152,7 +156,9 @@ export const updateProfile = async (
   if (data.biography !== undefined) add('biography', data.biography);
   if (data.firstName !== undefined) add('first_name', data.firstName);
   if (data.lastName !== undefined) add('last_name', data.lastName);
-  if (data.email !== undefined) add('email', data.email);
+  if (data.pendingEmail !== undefined) add('pending_email', data.pendingEmail);
+  if (data.verificationToken !== undefined) add('verification_token', data.verificationToken);
+  if (data.verificationTokenExpiresAt !== undefined) add('verification_token_expires_at', data.verificationTokenExpiresAt);
   if (data.birthdate !== undefined) add('birthdate', data.birthdate);
   if (data.locationLat !== undefined) add('latitude', data.locationLat);
   if (data.locationLng !== undefined) add('longitude', data.locationLng);
@@ -180,6 +186,12 @@ export const countUserPhotos = async (userId: number): Promise<number> => {
     [userId]
   );
   return result.rows[0]?.count ?? 0;
+};
+
+/** Remaining rows determine the count and selected-picture state after deletion. */
+export const getUserPhotos = async (userId: number): Promise<PhotoRow[]> => {
+  const result = await query<PhotoRow>('SELECT * FROM photos WHERE user_id = $1', [userId]);
+  return result.rows;
 };
 
 /**

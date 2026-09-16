@@ -1,6 +1,7 @@
 import { NextFunction, Response } from 'express';
 import { AuthenticatedRequest } from '../types';
 import { AppError } from '../utils/AppError';
+import { parseBoundedInt } from '../utils/queryValidation';
 import {
   getConversation,
   getConversationsList,
@@ -33,10 +34,9 @@ export class ChatController {
         throw AppError.forbidden('You can only view messages with connected users');
       }
 
-      const limitParam = Array.isArray(req.query.limit) ? req.query.limit[0] : req.query.limit;
-      const limit = Math.min(Number.parseInt(limitParam as string) || 50, 100);
-      const beforeIdParam = Array.isArray(req.query.beforeId) ? req.query.beforeId[0] : req.query.beforeId;
-      const beforeId = beforeIdParam ? Number.parseInt(beforeIdParam as string, 10) : undefined;
+      const limit = req.query.limit === undefined ? 50 : parseBoundedInt(req.query.limit, 'limit', 1, 100);
+      const beforeId = req.query.beforeId === undefined
+        ? undefined : parseBoundedInt(req.query.beforeId, 'beforeId', 1, Number.MAX_SAFE_INTEGER);
 
       const messages = await getConversation(userId, otherUserId, limit, beforeId);
 

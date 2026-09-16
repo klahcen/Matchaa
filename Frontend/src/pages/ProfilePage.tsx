@@ -43,7 +43,7 @@ const toDraft = (profile: Profile): ProfileDraft => ({
   last_name: profile.last_name ?? '',
   email: profile.email ?? '',
   gender: profile.gender ?? null,
-  sexual_preferences: profile.sexual_preferences ?? 'bisexual',
+  sexual_preferences: profile.sexual_preferences ?? 'female',
   biography: profile.biography ?? '',
 });
 
@@ -469,7 +469,7 @@ export const ProfilePage: React.FC = () => {
                   options={SEXUAL_PREFERENCE_OPTIONS}
                   value={draft.sexual_preferences}
                   onChange={(sexual_preferences) => setDraft({ ...draft, sexual_preferences })}
-                  hint="Defaults to bisexual"
+                  hint="Choose the gender you want to see"
                 />
               </div>
               <FormTextarea

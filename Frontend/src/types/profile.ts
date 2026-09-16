@@ -17,8 +17,8 @@ export interface Photo {
 }
 
 /** Fixed value sets — must stay in sync with the backend validators. */
-export const GENDER_OPTIONS = ['male', 'female', 'other'] as const;
-export const SEXUAL_PREFERENCE_OPTIONS = ['heterosexual', 'homosexual', 'bisexual'] as const;
+export const GENDER_OPTIONS = ['male', 'female'] as const;
+export const SEXUAL_PREFERENCE_OPTIONS = ['male', 'female'] as const;
 
 export type Gender = (typeof GENDER_OPTIONS)[number];
 export type SexualPreference = (typeof SEXUAL_PREFERENCE_OPTIONS)[number];
