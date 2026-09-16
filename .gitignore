@@ -12,6 +12,9 @@ dist
 ./Backend/dist
 ./Frontend/dist
 
-# User-uploaded profile photos (never commit user content)
+
+test-reports/
+
+
 Backend/uploads
 uploads
