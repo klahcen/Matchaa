@@ -20,10 +20,8 @@ import type { PublicProfileResponse, RelationshipState } from '../types/users';
  * indistinguishable from a deleted profile) and we render a neutral
  * "Profile not available" card — never a leaked "you are blocked".
  *
- * REAL-TIME NOTE: the backend writes everything the notification system needs
- * (views/likes rows + a pending_notifications array in each response), but the
- * actual push to the other user within 10s is wired up with the dedicated
- * Notifications feature — no Socket.io/websocket transport exists yet.
+ * Real-time messages and notifications are handled by the shared app header
+ * and Socket.io context while this page keeps the profile action state fresh.
  */
 
 type PendingAction = 'like' | 'unlike' | 'block' | 'unblock' | 'report' | null;
@@ -232,33 +230,6 @@ export const ProfileViewPage: React.FC = () => {
 
   return (
     <div className="min-h-screen w-full bg-brand-bg">
-      {/* Header — same gradient bar as /browse */}
-      <header className="sticky top-0 z-30 bg-gradient-to-br from-brand-start via-brand-mid to-brand-end shadow-lg">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3.5 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => navigate(-1)}
-              aria-label="Go back"
-              className="w-9 h-9 rounded-full bg-white/15 hover:bg-white/25 text-white flex items-center justify-center transition-colors"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15 19l-7-7 7-7" />
-              </svg>
-            </button>
-            <Link to="/browse" className="text-xl sm:text-2xl font-black tracking-tight text-white">
-              matcha
-            </Link>
-          </div>
-          <Link
-            to="/profile"
-            className="text-xs sm:text-sm font-bold uppercase tracking-wider text-white/90 hover:text-white transition-colors"
-          >
-            My profile
-          </Link>
-        </div>
-      </header>
-
       <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
         {loading && (
           <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
@@ -507,7 +478,7 @@ export const ProfileViewPage: React.FC = () => {
                         type="button"
                         variant="outline"
                         onClick={() => navigate(`/chat/${profile.id}`)}
-                        title="Messaging arrives with the Chat feature"
+                        title={`Message ${profile.first_name}`}
                       >
                         <MessageCircle className="w-4 h-4" /> Message
                       </PrimaryButton>

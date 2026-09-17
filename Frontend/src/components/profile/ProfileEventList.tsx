@@ -1,4 +1,5 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 import { resolveMediaUrl } from '../../api/profile';
 import type { ProfileSummary } from '../../types/profile';
 
@@ -75,48 +76,50 @@ export const ProfileEventList: React.FC<ProfileEventListProps> = ({
         const initials = `${person.first_name?.[0] ?? ''}${person.last_name?.[0] ?? ''}`.toUpperCase();
 
         return (
-          <li
-            key={person.id}
-            className="flex items-center gap-3 sm:gap-4 p-3 rounded-2xl bg-brand-bg border border-brand-border hover:border-brand-accent/40 transition-colors"
-          >
-            {avatar ? (
-              <img
-                src={avatar}
-                alt={`${person.username}'s profile picture`}
-                className="w-12 h-12 rounded-full object-cover shrink-0 border-2 border-brand-surface"
-                loading="lazy"
-              />
-            ) : (
-              <div className="w-12 h-12 rounded-full shrink-0 bg-gradient-to-br from-brand-start via-brand-mid to-brand-end flex items-center justify-center text-white font-black text-sm">
-                {initials || '?'}
-              </div>
-            )}
-
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-bold text-brand-text truncate">
-                {person.first_name} {person.last_name}
-                {person.age != null && (
-                  <span className="font-semibold text-brand-muted">, {person.age}</span>
-                )}
-              </p>
-              <p className="text-xs text-brand-muted truncate">@{person.username}</p>
-              {person.location_text && (
-                <p className="text-xs text-brand-muted truncate mt-0.5">
-                  <span aria-hidden="true">📍 </span>
-                  {person.location_text}
-                </p>
+          <li key={person.id}>
+            <Link
+              to={`/profile/${person.id}`}
+              className="flex items-center gap-3 sm:gap-4 p-3 rounded-2xl bg-brand-bg border border-brand-border hover:border-brand-accent/40 transition-colors focus:outline-none focus-visible:ring-3 focus-visible:ring-brand-accent/35"
+            >
+              {avatar ? (
+                <img
+                  src={avatar}
+                  alt={`${person.username}'s profile picture`}
+                  className="w-12 h-12 rounded-full object-cover shrink-0 border-2 border-brand-surface"
+                  loading="lazy"
+                />
+              ) : (
+                <div className="w-12 h-12 rounded-full shrink-0 bg-gradient-to-br from-brand-start via-brand-mid to-brand-end flex items-center justify-center text-white font-black text-sm">
+                  {initials || '?'}
+                </div>
               )}
-            </div>
 
-            <div className="shrink-0 text-right">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-brand-muted">
-                {eventLabel}
-              </p>
-              <p className="text-xs text-brand-text font-semibold">{formatDate(person.event_at)}</p>
-              <p className="text-[10px] text-brand-accent font-bold mt-0.5">
-                ★ {person.fame_rating} fame
-              </p>
-            </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold text-brand-text truncate">
+                  {person.first_name} {person.last_name}
+                  {person.age != null && (
+                    <span className="font-semibold text-brand-muted">, {person.age}</span>
+                  )}
+                </p>
+                <p className="text-xs text-brand-muted truncate">@{person.username}</p>
+                {person.location_text && (
+                  <p className="text-xs text-brand-muted truncate mt-0.5">
+                    <span aria-hidden="true">📍 </span>
+                    {person.location_text}
+                  </p>
+                )}
+              </div>
+
+              <div className="shrink-0 text-right">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-brand-muted">
+                  {eventLabel}
+                </p>
+                <p className="text-xs text-brand-text font-semibold">{formatDate(person.event_at)}</p>
+                <p className="text-[10px] text-brand-accent font-bold mt-0.5">
+                  ★ {person.fame_rating} fame
+                </p>
+              </div>
+            </Link>
           </li>
         );
       })}

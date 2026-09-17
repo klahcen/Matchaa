@@ -1,24 +1,25 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { fetchSuggestions } from '../api/browse';
-import { ErrorBanner } from '../components/common/ErrorBanner';
+import { fetchSearchResults } from '../api/search';
 import { BrowseEmptyState } from '../components/browse/BrowseEmptyState';
 import { FilterPanel } from '../components/browse/FilterPanel';
 import { Pagination } from '../components/browse/Pagination';
-import { SortControl } from '../components/browse/SortControl';
 import { SuggestionCard } from '../components/browse/SuggestionCard';
 import { SuggestionSkeleton } from '../components/browse/SuggestionSkeleton';
+import { ErrorBanner } from '../components/common/ErrorBanner';
 import {
   EMPTY_FILTER_DRAFT,
   LIMIT_OPTIONS,
-  type BrowseQuery,
   type FilterDraft,
-  type SortField,
   type SortOrder,
-  type SuggestionsResponse,
 } from '../types/browse';
+import {
+  SEARCH_SORT_OPTIONS,
+  type SearchQuery,
+  type SearchResponse,
+  type SearchSortField,
+} from '../types/search';
 
-/** Turns the applied draft into query params, omitting anything left blank. */
-const draftToQuery = (draft: FilterDraft): Partial<BrowseQuery> => {
+const draftToQuery = (draft: FilterDraft): Partial<SearchQuery> => {
   const toInt = (value: string): number | undefined => {
     const trimmed = value.trim();
     if (!trimmed) return undefined;
@@ -32,7 +33,7 @@ const draftToQuery = (draft: FilterDraft): Partial<BrowseQuery> => {
     ...(toInt(draft.minFame) !== undefined ? { minFame: toInt(draft.minFame) } : {}),
     ...(toInt(draft.maxFame) !== undefined ? { maxFame: toInt(draft.maxFame) } : {}),
     ...(draft.location.trim() ? { location: draft.location.trim() } : {}),
-    ...(draft.tags.length > 0 ? { tags: draft.tags } : {}),
+    ...(draft.tags.length > 0 ? { tags: draft.tags, tagsMatch: 'any' } : {}),
   };
 };
 
@@ -45,28 +46,21 @@ const countActiveFilters = (draft: FilterDraft): number =>
     draft.location.trim(),
   ].filter(Boolean).length + (draft.tags.length > 0 ? 1 : 0);
 
-export const BrowsePage: React.FC = () => {
-  // `draft` is what the panel shows; `applied` is what was last sent to the API.
-  // Keeping them separate means typing never triggers a request.
+export const ResearchPage: React.FC = () => {
   const [draft, setDraft] = useState<FilterDraft>({ ...EMPTY_FILTER_DRAFT });
   const [applied, setApplied] = useState<FilterDraft>({ ...EMPTY_FILTER_DRAFT });
-
-  const [sortBy, setSortBy] = useState<SortField>('relevance');
+  const [sortBy, setSortBy] = useState<SearchSortField>('fame');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState<number>(LIMIT_OPTIONS[0]);
-
-  const [data, setData] = useState<SuggestionsResponse | null>(null);
+  const [data, setData] = useState<SearchResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  // Stable identity for "the inputs that should trigger a fetch".
   const requestKey = JSON.stringify({ applied, sortBy, sortOrder, page, limit });
   const [fetchedKey, setFetchedKey] = useState<string | null>(null);
 
-  // Flip into the loading state during render rather than inside the effect, so
-  // the effect never calls setState synchronously (avoids a cascading render).
   if (fetchedKey !== requestKey) {
     setFetchedKey(requestKey);
     setLoading(true);
@@ -77,17 +71,16 @@ export const BrowsePage: React.FC = () => {
 
     const run = async () => {
       try {
-        const result = await fetchSuggestions(
+        const result = await fetchSearchResults(
           { ...draftToQuery(applied), sortBy, sortOrder, page, limit },
           { signal: controller.signal }
         );
         setData(result);
         setError(null);
       } catch (err: any) {
-        // A superseded request was cancelled on purpose — ignore it silently.
         if (controller.signal.aborted) return;
-        setError(err?.message || 'Failed to load suggestions');
         setData(null);
+        setError(err?.message || 'Failed to load research results');
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }
@@ -99,7 +92,6 @@ export const BrowsePage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestKey]);
 
-  // Scroll to the top of the grid when the page changes.
   const handlePageChange = useCallback((next: number) => {
     setPage(next);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -107,7 +99,7 @@ export const BrowsePage: React.FC = () => {
 
   const handleApplyFilters = () => {
     setApplied({ ...draft });
-    setPage(1); // a new filter set invalidates the current page position
+    setPage(1);
     setDrawerOpen(false);
   };
 
@@ -117,27 +109,16 @@ export const BrowsePage: React.FC = () => {
     setPage(1);
   };
 
-  const handleSortByChange = (field: SortField) => {
+  const handleSortByChange = (field: SearchSortField) => {
+    const option = SEARCH_SORT_OPTIONS.find((item) => item.value === field);
     setSortBy(field);
-    setPage(1);
-  };
-
-  const handleSortOrderChange = (order: SortOrder) => {
-    setSortOrder(order);
+    setSortOrder(option?.defaultOrder ?? 'desc');
     setPage(1);
   };
 
   const activeCount = countActiveFilters(applied);
-  const suggestions = data?.suggestions ?? [];
-  const orientation = data?.orientation;
+  const results = data?.results ?? [];
   const hasFilters = activeCount > 0;
-
-  // Three distinct empty causes, each with its own message and action.
-  const emptyVariant = orientation?.gender_required
-    ? 'gender-required'
-    : hasFilters
-      ? 'filtered'
-      : 'no-candidates';
 
   const filterPanel = (
     <FilterPanel
@@ -152,16 +133,12 @@ export const BrowsePage: React.FC = () => {
   return (
     <div className="min-h-screen w-full bg-brand-bg">
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
-        {/* Mobile filter trigger */}
         <div className="lg:hidden mb-4 flex items-center justify-between gap-3">
           <button
             type="button"
             onClick={() => setDrawerOpen(true)}
             className="inline-flex items-center gap-2 min-h-[44px] px-5 rounded-full bg-brand-surface border border-brand-border text-sm font-bold text-brand-text hover:border-brand-accent hover:text-brand-accent transition-colors"
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
-            </svg>
             Filters
             {activeCount > 0 && (
               <span className="ml-0.5 min-w-[20px] h-5 px-1.5 rounded-full bg-brand-accent text-white text-[11px] font-black flex items-center justify-center">
@@ -169,18 +146,16 @@ export const BrowsePage: React.FC = () => {
               </span>
             )}
           </button>
-
           <p className="text-xs text-brand-muted font-semibold">
-            {loading ? 'Searching…' : `${data?.pagination.total ?? 0} matches`}
+            {loading ? 'Searching…' : `${data?.pagination.total ?? 0} results`}
           </p>
         </div>
 
         <div className="flex gap-6 items-start">
-          {/* Desktop sidebar */}
           <aside className="hidden lg:block w-72 shrink-0 sticky top-24">
             <div className="bg-brand-surface rounded-3xl shadow-md border border-brand-border p-5">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-sm font-black uppercase tracking-wider text-brand-text">Filters</h2>
+                <h2 className="text-sm font-black uppercase tracking-wider text-brand-text">Research filters</h2>
                 {activeCount > 0 && (
                   <span className="min-w-[22px] h-5 px-1.5 rounded-full bg-brand-accent text-white text-[11px] font-black flex items-center justify-center">
                     {activeCount}
@@ -191,34 +166,44 @@ export const BrowsePage: React.FC = () => {
             </div>
           </aside>
 
-          {/* Results */}
           <div className="flex-1 min-w-0">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
               <div>
-                <h1 className="text-xl sm:text-2xl font-black text-brand-text">Suggested for you</h1>
+                <h1 className="text-xl sm:text-2xl font-black text-brand-text">Research members</h1>
                 <p className="text-xs sm:text-sm text-brand-muted mt-0.5">
-                  Ranked by proximity, shared interests and fame.
-                  {orientation && !orientation.gender_required && (
-                    <> Showing <span className="font-semibold text-brand-text">{orientation.preference}</span> profiles who are also looking for you.</>
-                  )}
+                  Advanced search over eligible profiles. Results still respect gender preference, blocks, verified accounts, and profile photos.
                 </p>
               </div>
 
-              <SortControl
-                sortBy={sortBy}
-                sortOrder={sortOrder}
-                onSortByChange={handleSortByChange}
-                onSortOrderChange={handleSortOrderChange}
-                disabled={loading && !data}
-              />
+              <div className="flex items-center gap-2">
+                <select
+                  value={sortBy}
+                  onChange={(event) => handleSortByChange(event.target.value as SearchSortField)}
+                  disabled={loading && !data}
+                  className="min-h-[44px] px-4 rounded-full bg-brand-surface border border-brand-border text-sm font-bold text-brand-text outline-none focus:border-brand-accent focus:ring-3 focus:ring-brand-accent/20"
+                  aria-label="Sort research results"
+                >
+                  {SEARCH_SORT_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSortOrder((current) => (current === 'asc' ? 'desc' : 'asc'));
+                    setPage(1);
+                  }}
+                  disabled={loading && !data}
+                  className="min-h-[44px] px-4 rounded-full bg-brand-surface border border-brand-border text-sm font-bold text-brand-text hover:border-brand-accent hover:text-brand-accent transition-colors disabled:opacity-50"
+                >
+                  {sortOrder === 'asc' ? 'Ascending' : 'Descending'}
+                </button>
+              </div>
             </div>
 
-            {/* Rows per page */}
             <div className="flex items-center justify-between gap-3 mb-4">
               <p className="text-xs text-brand-muted font-semibold hidden sm:block">
-                {loading
-                  ? 'Loading suggestions…'
-                  : `${suggestions.length} shown · ${data?.pagination.total ?? 0} total`}
+                {loading ? 'Loading research results…' : `${results.length} shown · ${data?.pagination.total ?? 0} total`}
               </p>
               <div className="flex items-center gap-1.5 ml-auto">
                 <span className="text-xs text-brand-muted font-semibold">Per page</span>
@@ -244,17 +229,14 @@ export const BrowsePage: React.FC = () => {
 
             <ErrorBanner message={error} onDismiss={() => setError(null)} />
 
-            {/* Grid: 1 column on phones, 2 on tablets, 3 on desktop */}
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-5">
               {loading ? (
                 <SuggestionSkeleton count={Math.min(limit, 6)} />
-              ) : suggestions.length > 0 ? (
-                suggestions.map((suggestion) => (
-                  <SuggestionCard key={suggestion.id} suggestion={suggestion} />
-                ))
+              ) : results.length > 0 ? (
+                results.map((result) => <SuggestionCard key={result.id} suggestion={result} />)
               ) : (
                 <BrowseEmptyState
-                  variant={emptyVariant}
+                  variant={hasFilters ? 'filtered' : 'no-candidates'}
                   onClearFilters={handleResetFilters}
                 />
               )}
@@ -262,18 +244,13 @@ export const BrowsePage: React.FC = () => {
 
             {!loading && data && data.pagination.total > 0 && (
               <div className="mt-8">
-                <Pagination
-                  pagination={data.pagination}
-                  onPageChange={handlePageChange}
-                  disabled={loading}
-                />
+                <Pagination pagination={data.pagination} onPageChange={handlePageChange} disabled={loading} />
               </div>
             )}
           </div>
         </div>
       </main>
 
-      {/* Mobile slide-out filter drawer */}
       {drawerOpen && (
         <div className="lg:hidden fixed inset-0 z-50 flex">
           <button
@@ -285,20 +262,18 @@ export const BrowsePage: React.FC = () => {
           <div
             role="dialog"
             aria-modal="true"
-            aria-label="Filter suggestions"
+            aria-label="Research filters"
             className="relative ml-auto h-full w-[88%] max-w-sm bg-brand-surface shadow-2xl overflow-y-auto p-5"
           >
             <div className="flex items-center justify-between mb-5">
-              <h2 className="text-base font-black text-brand-text">Filters</h2>
+              <h2 className="text-base font-black text-brand-text">Research filters</h2>
               <button
                 type="button"
                 onClick={() => setDrawerOpen(false)}
                 aria-label="Close filters"
                 className="w-9 h-9 rounded-full bg-brand-bg text-brand-muted hover:text-brand-text flex items-center justify-center transition-colors"
               >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" />
-                </svg>
+                ×
               </button>
             </div>
             {filterPanel}

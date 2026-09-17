@@ -146,13 +146,13 @@ export const updateProfile = async (
   const values: any[] = [];
   let i = 1;
 
-  const add = (column: string, value: any): void => {
-    assignments.push(`${column} = $${i++}`);
+  const add = (column: string, value: any, cast?: string): void => {
+    assignments.push(`${column} = $${i++}${cast ? `::${cast}` : ''}`);
     values.push(value);
   };
 
-  if (data.gender !== undefined) add('gender', data.gender);
-  if (data.sexualPreferences !== undefined) add('sexual_preferences', data.sexualPreferences);
+  if (data.gender !== undefined) add('gender', data.gender, 'user_gender');
+  if (data.sexualPreferences !== undefined) add('sexual_preferences', data.sexualPreferences, 'user_sexual_preference');
   if (data.biography !== undefined) add('biography', data.biography);
   if (data.firstName !== undefined) add('first_name', data.firstName);
   if (data.lastName !== undefined) add('last_name', data.lastName);

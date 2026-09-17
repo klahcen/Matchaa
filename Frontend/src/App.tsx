@@ -1,5 +1,7 @@
 import React from 'react';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { AppHeader } from './components/app/AppHeader';
+import { IncomingCallToast } from './components/app/IncomingCallToast';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { SocketProvider } from './context/SocketContext';
 import { BrowsePage } from './pages/BrowsePage';
@@ -14,6 +16,19 @@ import { RegisterPage } from './pages/RegisterPage';
 import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import { ProfileViewPage } from './pages/ProfileViewPage';
 import { VerifyEmailPage } from './pages/VerifyEmailPage';
+import { ResearchPage } from './pages/ResearchPage';
+import { NotificationsPage } from './pages/NotificationsPage';
+import { MapPage } from './pages/MapPage';
+
+const ScrollToTop: React.FC = () => {
+  const { pathname } = useLocation();
+
+  React.useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+  }, [pathname]);
+
+  return null;
+};
 
 // Protected route wrapper for authenticated views like /browse
 const ProtectedRoute: React.FC<{ children: React.ReactElement }> = ({ children }) => {
@@ -31,7 +46,15 @@ const ProtectedRoute: React.FC<{ children: React.ReactElement }> = ({ children }
     return <Navigate to="/login" replace />;
   }
 
-  return children;
+  return (
+    <>
+      <AppHeader />
+      <IncomingCallToast />
+      <div className="pt-[68px]">
+        {children}
+      </div>
+    </>
+  );
 };
 
 // Public-only route wrapper (redirects logged-in users to /browse)
@@ -107,6 +130,23 @@ export const AppRoutes: React.FC = () => {
           </ProtectedRoute>
         }
       />
+      <Route
+        path="/research"
+        element={
+          <ProtectedRoute>
+            <ResearchPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route path="/search" element={<Navigate to="/research" replace />} />
+      <Route
+        path="/map"
+        element={
+          <ProtectedRoute>
+            <MapPage />
+          </ProtectedRoute>
+        }
+      />
 
       {/* Profile routes */}
       <Route
@@ -164,6 +204,14 @@ export const AppRoutes: React.FC = () => {
           </ProtectedRoute>
         }
       />
+      <Route
+        path="/notifications"
+        element={
+          <ProtectedRoute>
+            <NotificationsPage />
+          </ProtectedRoute>
+        }
+      />
 
       {/* Catch-all fallback */}
       <Route path="*" element={<Navigate to="/login" replace />} />
@@ -174,6 +222,7 @@ export const AppRoutes: React.FC = () => {
 export const App: React.FC = () => {
   return (
     <BrowserRouter>
+      <ScrollToTop />
       <AuthProvider>
         <SocketProvider>
           <AppRoutes />

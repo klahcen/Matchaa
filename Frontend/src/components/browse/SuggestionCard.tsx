@@ -49,10 +49,12 @@ export const SuggestionCard: React.FC<SuggestionCardProps> = ({ suggestion }) =>
           </div>
         )}
 
-        {/* Relevance score */}
-        <div className="absolute top-2.5 left-2.5 px-2.5 py-1 rounded-full bg-black/55 backdrop-blur-sm text-white text-[11px] font-black tracking-wide">
-          {suggestion.relevance_score}% match
-        </div>
+        {/* Relevance score (Browsing only; Research has no relevance formula). */}
+        {typeof suggestion.relevance_score === 'number' && (
+          <div className="absolute top-2.5 left-2.5 px-2.5 py-1 rounded-full bg-black/55 backdrop-blur-sm text-white text-[11px] font-black tracking-wide">
+            {suggestion.relevance_score}% match
+          </div>
+        )}
 
         {/* Same-area highlight */}
         {suggestion.same_area && (

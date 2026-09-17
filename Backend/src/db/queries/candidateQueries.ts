@@ -75,6 +75,9 @@ export interface CandidateRow {
   shared_tags: string[];
   distance_km: number | null;
   same_area: boolean;
+  /** Jittered neighborhood-level coordinates for the bonus map; never exact GPS. */
+  map_latitude: number | null;
+  map_longitude: number | null;
 }
 
 export interface ViewerOrientation {
@@ -146,6 +149,12 @@ export const buildCandidateCte = (viewerId: number): CandidateCte => {
         u.gender,
         u.fame_rating,
         u.location_text,
+        CASE WHEN u.latitude IS NULL THEN NULL
+             ELSE ROUND((u.latitude + (((u.id % 101) - 50) * 0.0002))::numeric, 5)::float
+        END AS map_latitude,
+        CASE WHEN u.longitude IS NULL THEN NULL
+             ELSE ROUND((u.longitude + ((((u.id * 31) % 101) - 50) * 0.0002))::numeric, 5)::float
+        END AS map_longitude,
         CASE WHEN u.birthdate IS NULL THEN NULL
              ELSE date_part('year', age(u.birthdate))::int
         END AS age,
@@ -267,6 +276,8 @@ export const mapCandidateRow = (r: Record<string, any>): CandidateRow => ({
   shared_tags: Array.isArray(r.shared_tags) ? r.shared_tags : [],
   distance_km: r.distance_km === null || r.distance_km === undefined ? null : Number(r.distance_km),
   same_area: Boolean(r.same_area),
+  map_latitude: r.map_latitude === null || r.map_latitude === undefined ? null : Number(r.map_latitude),
+  map_longitude: r.map_longitude === null || r.map_longitude === undefined ? null : Number(r.map_longitude),
 });
 
 /** Shared SELECT column list for the candidate summary (alias `c`). */
@@ -275,7 +286,7 @@ export const CANDIDATE_SELECT_COLUMNS = `
       c.photo_url, c.location_text, c.fame_rating,
       c.shared_tag_count, c.shared_tags,
       ROUND(c.distance_km::numeric, 1)::float AS distance_km,
-      c.same_area`;
+      c.same_area, c.map_latitude, c.map_longitude`;
 
 /** Page query + count query pair sharing one WHERE, so total never disagrees. */
 export interface BuiltCandidateQuery {

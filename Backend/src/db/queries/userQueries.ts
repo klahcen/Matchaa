@@ -70,7 +70,7 @@ export const createUser = async (data: CreateUserData): Promise<User> => {
       sexual_preferences,
       is_verified
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, 'male'), COALESCE($9, 'female'), FALSE)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, 'male')::user_gender, COALESCE($9, 'female')::user_sexual_preference, FALSE)
     RETURNING *;
   `;
 

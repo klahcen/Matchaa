@@ -36,8 +36,11 @@ export interface Suggestion {
   distance_km: number | null;
   /** True when within 5 km or location_text matches exactly. */
   same_area: boolean;
-  /** Weighted 0–100 match score (see services/matchScoringService.ts). */
-  relevance_score: number;
+  /** Jittered neighborhood-level coordinates for the bonus map; never exact GPS. */
+  map_latitude: number | null;
+  map_longitude: number | null;
+  /** Weighted 0–100 match score (Browsing only; Research returns explicit search results without a relevance score). */
+  relevance_score?: number;
 }
 
 export interface BrowsePagination {

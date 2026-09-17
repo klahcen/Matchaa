@@ -4,6 +4,7 @@ import { useAuth } from './AuthContext';
 import type { Conversation } from '../types/chat';
 import type { Message } from '../types/chat';
 import type { Notification } from '../types/notification';
+import type { IncomingCall } from '../types/call';
 
 interface SocketContextType {
   socket: Socket | null;
@@ -12,6 +13,7 @@ interface SocketContextType {
   unreadMessageCount: number;
   notifications: Notification[];
   conversations: Conversation[];
+  incomingCall: IncomingCall | null;
   addNotification: (notification: Notification) => void;
   addMessage: (message: Message, conversationId: number) => void;
   incrementUnreadNotifications: () => void;
@@ -24,6 +26,8 @@ interface SocketContextType {
   setUnreadMessageCount: (count: number) => void;
   markNotificationRead: (id: number) => void;
   markConversationRead: (conversationId: number) => void;
+  clearIncomingCall: () => void;
+  rejectIncomingCall: () => void;
 }
 
 const SocketContext = createContext<SocketContextType | undefined>(undefined);
@@ -39,9 +43,15 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [unreadMessageCount, setUnreadMessageCount] = useState(0);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [incomingCall, setIncomingCall] = useState<IncomingCall | null>(null);
 
   const socketRef = useRef<Socket | null>(null);
   const initializedRef = useRef(false);
+  const conversationsRef = useRef<Conversation[]>([]);
+
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
 
   const addNotification = useCallback((notification: Notification) => {
     setNotifications((prev) => [notification, ...prev].slice(0, 100));
@@ -49,6 +59,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, []);
 
   const addMessage = useCallback((message: Message, conversationId: number) => {
+    const isIncoming = message.receiver_id === user?.id;
     setConversations((prev) =>
       prev.map((conv) =>
         conv.id === conversationId
@@ -57,13 +68,13 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               last_message_content: message.content,
               last_message_at: message.created_at,
               last_message_sender_id: message.sender_id,
-              unread_count: conv.id === conversationId ? conv.unread_count + 1 : conv.unread_count,
+              unread_count: isIncoming ? conv.unread_count + 1 : conv.unread_count,
             }
           : conv
       )
     );
-    setUnreadMessageCount((prev) => prev + 1);
-  }, []);
+    if (isIncoming) setUnreadMessageCount((prev) => prev + 1);
+  }, [user?.id]);
 
   const incrementUnreadNotifications = useCallback(() => {
     setUnreadNotificationCount((prev) => prev + 1);
@@ -89,18 +100,29 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, []);
 
   const markConversationRead = useCallback((conversationId: number) => {
+    const unreadToClear = conversationsRef.current.find((c) => c.id === conversationId)?.unread_count ?? 0;
+    if (unreadToClear <= 0) return;
+
     setConversations((prevConvs) =>
       prevConvs.map((conv) =>
-        conv.id === conversationId && conv.unread_count > 0
-          ? { ...conv, unread_count: 0 }
-          : conv
+        conv.id === conversationId ? { ...conv, unread_count: 0 } : conv
       )
     );
-    setUnreadMessageCount((prevCount) => {
-      const conv = conversations.find((c) => c.id === conversationId);
-      return conv ? Math.max(0, prevCount - conv.unread_count) : prevCount;
+    setUnreadMessageCount((prevCount) => Math.max(0, prevCount - unreadToClear));
+  }, []);
+
+  const clearIncomingCall = useCallback(() => {
+    setIncomingCall(null);
+  }, []);
+
+  const rejectIncomingCall = useCallback(() => {
+    setIncomingCall((current) => {
+      if (current && socketRef.current) {
+        socketRef.current.emit('call:reject', { callerId: current.fromUserId, callId: current.callId });
+      }
+      return null;
     });
-  }, [conversations]);
+  }, []);
 
   useEffect(() => {
     if (isLoading || !user) {
@@ -167,6 +189,19 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
     });
 
+    newSocket.on('call:incoming', (data: IncomingCall) => {
+      console.log('[Socket] Incoming call:', data);
+      setIncomingCall(data);
+    });
+
+    const clearCallIfCurrent = (data: { callId: string }) => {
+      setIncomingCall((current) => (current?.callId === data.callId ? null : current));
+    };
+
+    newSocket.on('call:cancelled', clearCallIfCurrent);
+    newSocket.on('call:ended', clearCallIfCurrent);
+    newSocket.on('call:rejected', clearCallIfCurrent);
+
     newSocket.on('user:online', (data: { userId: number }) => {
       console.log('[Socket] User online:', data.userId);
     });
@@ -196,6 +231,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         unreadMessageCount,
         notifications,
         conversations,
+        incomingCall,
         addNotification,
         addMessage,
         incrementUnreadNotifications,
@@ -208,6 +244,8 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setUnreadMessageCount,
         markNotificationRead,
         markConversationRead,
+        clearIncomingCall,
+        rejectIncomingCall,
       }}
     >
       {children}

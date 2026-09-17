@@ -5,7 +5,9 @@ export type NotificationType =
   | 'view'
   | 'message'
   | 'new_connection'
-  | 'unlike';
+  | 'unlike'
+  | 'date_proposed'
+  | 'date_response';
 
 export interface NotificationRow {
   id: number;
@@ -106,6 +108,10 @@ export const buildNotificationContent = (
       return `You and ${fromUserFirstName} liked each other — you are now connected!`;
     case 'unlike':
       return `${fromUserFirstName} removed their like`;
+    case 'date_proposed':
+      return `${fromUserFirstName} proposed a date`;
+    case 'date_response':
+      return `${fromUserFirstName} responded to your date proposal`;
     default:
       return 'New notification';
   }

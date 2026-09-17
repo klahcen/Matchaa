@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { profileApi, resolveMediaUrl } from '../api/profile';
 import { ErrorBanner } from '../components/common/ErrorBanner';
 import { FormInput } from '../components/common/FormInput';
@@ -12,7 +12,6 @@ import { PillSelector } from '../components/profile/PillSelector';
 import { ProfileEventList } from '../components/profile/ProfileEventList';
 import { ProfileSection } from '../components/profile/ProfileSection';
 import { TagPicker } from '../components/profile/TagPicker';
-import { useAuth } from '../context/AuthContext';
 import {
   GENDER_OPTIONS,
   SEXUAL_PREFERENCE_OPTIONS,
@@ -33,15 +32,22 @@ interface ProfileDraft {
   first_name: string;
   last_name: string;
   email: string;
+  birthdate: string;
   gender: Gender | null;
   sexual_preferences: SexualPreference;
   biography: string;
 }
 
+const toDateInputValue = (value: string | null): string => {
+  if (!value) return '';
+  return value.slice(0, 10);
+};
+
 const toDraft = (profile: Profile): ProfileDraft => ({
   first_name: profile.first_name ?? '',
   last_name: profile.last_name ?? '',
   email: profile.email ?? '',
+  birthdate: toDateInputValue(profile.birthdate),
   gender: profile.gender ?? null,
   sexual_preferences: profile.sexual_preferences ?? 'female',
   biography: profile.biography ?? '',
@@ -54,10 +60,34 @@ const hasChanges = (draft: ProfileDraft, profile: Profile): boolean => {
   );
 };
 
-export const ProfilePage: React.FC = () => {
-  const navigate = useNavigate();
-  const { logout } = useAuth();
+const shiftYears = (years: number): string => {
+  const date = new Date();
+  date.setFullYear(date.getFullYear() + years);
+  return date.toISOString().slice(0, 10);
+};
 
+const MAX_BIRTHDATE = shiftYears(-18);
+const MIN_BIRTHDATE = shiftYears(-120);
+
+const computeAge = (birthdate: string | null): number | null => {
+  if (!birthdate) return null;
+  const date = new Date(`${toDateInputValue(birthdate)}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - date.getFullYear();
+  const monthDiff = today.getMonth() - date.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < date.getDate())) age--;
+  return age >= 0 ? age : null;
+};
+
+const validateBirthdate = (birthdate: string): string | null => {
+  if (!birthdate) return null;
+  if (birthdate > MAX_BIRTHDATE) return 'You must be at least 18 years old to use Matcha.';
+  if (birthdate < MIN_BIRTHDATE) return 'Please enter a realistic date of birth.';
+  return null;
+};
+
+export const ProfilePage: React.FC = () => {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [draft, setDraft] = useState<ProfileDraft | null>(null);
   const [loading, setLoading] = useState(true);
@@ -149,10 +179,17 @@ export const ProfilePage: React.FC = () => {
     setSaving(true);
     setError(null);
     try {
+      const birthdateError = validateBirthdate(draft.birthdate);
+      if (birthdateError) {
+        setError(birthdateError);
+        return;
+      }
+
       const updated = await profileApi.updateMe({
         first_name: draft.first_name,
         last_name: draft.last_name,
         email: draft.email,
+        birthdate: draft.birthdate || null,
         gender: draft.gender ?? undefined,
         sexual_preferences: draft.sexual_preferences,
         biography: draft.biography,
@@ -276,11 +313,6 @@ export const ProfilePage: React.FC = () => {
     return result.location_text;
   };
 
-  const handleLogout = async () => {
-    await logout();
-    navigate('/login', { replace: true });
-  };
-
   if (loading) {
     return (
       <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-brand-start via-brand-mid to-brand-end">
@@ -306,6 +338,7 @@ export const ProfilePage: React.FC = () => {
   );
   const initials = `${profile.first_name?.[0] ?? ''}${profile.last_name?.[0] ?? ''}`.toUpperCase();
   const dirty = hasChanges(draft, profile);
+  const age = computeAge(profile.birthdate);
 
   const tabs: { id: Tab; label: string; count?: number }[] = [
     { id: 'edit', label: 'Edit profile' },
@@ -315,30 +348,7 @@ export const ProfilePage: React.FC = () => {
 
   return (
     <div className="min-h-screen w-full bg-brand-bg">
-      {/* Gradient header */}
-      <header className="bg-gradient-to-br from-brand-start via-brand-mid to-brand-end px-4 pt-5 pb-24 sm:px-6">
-        <div className="max-w-3xl mx-auto flex items-center justify-between gap-3">
-          <Link
-            to="/browse"
-            className="inline-flex items-center gap-1.5 text-white/90 hover:text-white text-xs sm:text-sm font-bold uppercase tracking-wider transition-colors"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15 19l-7-7 7-7" />
-            </svg>
-            Browse
-          </Link>
-          <span className="text-2xl font-black tracking-tight text-white">matcha</span>
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="text-white/90 hover:text-white text-xs sm:text-sm font-bold uppercase tracking-wider transition-colors"
-          >
-            Sign out
-          </button>
-        </div>
-      </header>
-
-      <main className="max-w-3xl mx-auto px-4 sm:px-6 -mt-16 pb-12">
+      <main className="max-w-3xl mx-auto px-4 sm:px-6 py-6 pb-12">
         {/* Identity card */}
         <div className="bg-brand-surface rounded-3xl shadow-xl p-5 sm:p-7 mb-5">
           <div className="flex flex-col sm:flex-row items-center gap-5">
@@ -368,6 +378,11 @@ export const ProfilePage: React.FC = () => {
                 <span className="px-3 py-1.5 rounded-full bg-brand-bg border border-brand-border text-xs font-semibold text-brand-muted">
                   {profile.tags.length} {profile.tags.length === 1 ? 'interest' : 'interests'}
                 </span>
+                {age !== null && (
+                  <span className="px-3 py-1.5 rounded-full bg-brand-bg border border-brand-border text-xs font-semibold text-brand-muted">
+                    {age} years old
+                  </span>
+                )}
               </div>
               {!profile.location_text && (
                 <p className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mt-3">
@@ -448,6 +463,17 @@ export const ProfilePage: React.FC = () => {
                 onChange={(e) => setDraft({ ...draft, email: e.target.value })}
                 hint="Changing this does not require re-verification"
                 required
+              />
+              <FormInput
+                label="Date of Birth"
+                id="birthdate"
+                type="date"
+                value={draft.birthdate}
+                min={MIN_BIRTHDATE}
+                max={MAX_BIRTHDATE}
+                onChange={(e) => setDraft({ ...draft, birthdate: e.target.value })}
+                error={validateBirthdate(draft.birthdate)}
+                hint="Shown publicly as age only"
               />
             </ProfileSection>
 

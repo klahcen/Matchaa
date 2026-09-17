@@ -1,4 +1,4 @@
-export type NotificationType = 'like' | 'view' | 'message' | 'new_connection' | 'unlike';
+export type NotificationType = 'like' | 'view' | 'message' | 'new_connection' | 'unlike' | 'date_proposed' | 'date_response';
 
 export interface Notification {
   id: number;

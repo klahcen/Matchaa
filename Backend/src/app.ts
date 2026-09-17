@@ -10,6 +10,7 @@ import { profileViewRoutes } from './routes/profileViewRoutes';
 import { searchRoutes } from './routes/searchRoutes';
 import { chatRoutes } from './routes/chatRoutes';
 import { notificationRoutes } from './routes/notificationRoutes';
+import { dateRoutes } from './routes/dateRoutes';
 
 export const createApp = (): Application => {
   const app = express();
@@ -67,6 +68,9 @@ export const createApp = (): Application => {
 
   // Mount notification routes (/api/notifications)
   app.use('/api/notifications', notificationRoutes);
+
+  // Mount date/event proposal routes (/api/dates)
+  app.use('/api/dates', dateRoutes);
 
   // Handle 404 for unmapped routes
   app.use(notFoundHandler);

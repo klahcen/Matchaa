@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { resolveMediaUrl } from '../../api/profile';
 import type { Photo } from '../../types/profile';
 
@@ -13,13 +13,119 @@ interface PhotoGridProps {
 
 const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;
+const EDIT_CANVAS_SIZE = 1000;
+
+type PhotoFilter = 'none' | 'grayscale' | 'warm' | 'cool' | 'contrast';
+
+interface EditOptions {
+  zoom: number;
+  offsetX: number;
+  offsetY: number;
+  rotation: number;
+  filter: PhotoFilter;
+}
+
+const DEFAULT_EDIT_OPTIONS: EditOptions = {
+  zoom: 1,
+  offsetX: 0,
+  offsetY: 0,
+  rotation: 0,
+  filter: 'none',
+};
+
+const FILTER_LABELS: Record<PhotoFilter, string> = {
+  none: 'Natural',
+  grayscale: 'Black & white',
+  warm: 'Warm',
+  cool: 'Cool',
+  contrast: 'High contrast',
+};
+
+const filterToCanvasValue = (filter: PhotoFilter): string => {
+  switch (filter) {
+    case 'grayscale':
+      return 'grayscale(1)';
+    case 'warm':
+      return 'sepia(0.22) saturate(1.18) contrast(1.05)';
+    case 'cool':
+      return 'saturate(1.08) hue-rotate(12deg) brightness(1.02)';
+    case 'contrast':
+      return 'contrast(1.18) saturate(1.08)';
+    default:
+      return 'none';
+  }
+};
+
+const loadImage = (src: string): Promise<HTMLImageElement> =>
+  new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('Could not load image for editing'));
+    image.src = src;
+  });
+
+const renderEditedImage = async (
+  sourceUrl: string,
+  options: EditOptions,
+  size = EDIT_CANVAS_SIZE
+): Promise<HTMLCanvasElement> => {
+  const image = await loadImage(sourceUrl);
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Your browser cannot edit this image');
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, size, size);
+  ctx.save();
+
+  const normalizedRotation = ((options.rotation % 360) + 360) % 360;
+  const quarterTurn = normalizedRotation === 90 || normalizedRotation === 270;
+  const rotatedWidth = quarterTurn ? image.naturalHeight : image.naturalWidth;
+  const rotatedHeight = quarterTurn ? image.naturalWidth : image.naturalHeight;
+  const coverScale = Math.max(size / rotatedWidth, size / rotatedHeight) * options.zoom;
+  const offsetX = (options.offsetX / 100) * (size / 2);
+  const offsetY = (options.offsetY / 100) * (size / 2);
+
+  ctx.translate(size / 2, size / 2);
+  ctx.rotate((normalizedRotation * Math.PI) / 180);
+  ctx.filter = filterToCanvasValue(options.filter);
+  ctx.drawImage(
+    image,
+    -image.naturalWidth * coverScale / 2 + offsetX,
+    -image.naturalHeight * coverScale / 2 + offsetY,
+    image.naturalWidth * coverScale,
+    image.naturalHeight * coverScale
+  );
+  ctx.restore();
+
+  return canvas;
+};
+
+const canvasToJpegFile = (canvas: HTMLCanvasElement, originalName: string): Promise<File> =>
+  new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          reject(new Error('Could not export edited photo'));
+          return;
+        }
+        const baseName = originalName.replace(/\.[^.]+$/, '') || 'matcha-photo';
+        resolve(new File([blob], `${baseName}-edited.jpg`, { type: 'image/jpeg' }));
+      },
+      'image/jpeg',
+      0.88
+    );
+  });
 
 /**
  * Photo grid with up to `maxPhotos` slots.
  *
- * Reflows from 3 columns on desktop to 2 on small screens. Exactly one photo
- * may be the profile picture; if none is set (e.g. the user deleted it), the
- * grid says so explicitly rather than silently promoting another photo.
+ * Uploads now support drag-and-drop and a small client-side editor. The editor
+ * applies a square crop, 90-degree rotation and one filter before the existing
+ * backend upload endpoint receives the final image blob.
  */
 export const PhotoGrid: React.FC<PhotoGridProps> = ({
   photos,
@@ -30,11 +136,50 @@ export const PhotoGrid: React.FC<PhotoGridProps> = ({
   onError,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const [uploading, setUploading] = useState(false);
   const [pendingId, setPendingId] = useState<number | null>(null);
+  const [dragActive, setDragActive] = useState(false);
+  const [editingFile, setEditingFile] = useState<File | null>(null);
+  const [editingUrl, setEditingUrl] = useState<string | null>(null);
+  const [editOptions, setEditOptions] = useState<EditOptions>(DEFAULT_EDIT_OPTIONS);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   const hasProfilePicture = photos.some((p) => p.is_profile_picture);
   const slotsRemaining = Math.max(0, maxPhotos - photos.length);
+
+  useEffect(() => {
+    return () => {
+      if (editingUrl) URL.revokeObjectURL(editingUrl);
+    };
+  }, [editingUrl]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const canvas = previewCanvasRef.current;
+    if (!canvas || !editingUrl) return;
+
+    const drawPreview = async () => {
+      try {
+        const rendered = await renderEditedImage(editingUrl, editOptions, 700);
+        if (cancelled) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        canvas.width = rendered.width;
+        canvas.height = rendered.height;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(rendered, 0, 0);
+        setPreviewError(null);
+      } catch (error: any) {
+        if (!cancelled) setPreviewError(error?.message || 'Could not preview this photo');
+      }
+    };
+
+    void drawPreview();
+    return () => {
+      cancelled = true;
+    };
+  }, [editingUrl, editOptions]);
 
   /**
    * Client-side pre-check mirroring the server rules, so obvious mistakes get
@@ -42,6 +187,7 @@ export const PhotoGrid: React.FC<PhotoGridProps> = ({
    * of it (including real magic-byte inspection).
    */
   const validateFile = (file: File): string | null => {
+    if (slotsRemaining <= 0) return `You already have the maximum of ${maxPhotos} photos.`;
     if (!ACCEPTED_TYPES.includes(file.type)) {
       return `Unsupported image type "${file.type || 'unknown'}". Allowed: JPEG, PNG, WebP.`;
     }
@@ -52,24 +198,40 @@ export const PhotoGrid: React.FC<PhotoGridProps> = ({
     return null;
   };
 
-  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = ''; // allow re-selecting the same file after an error
-
-    if (!file) return;
-
+  const openEditor = (file: File) => {
     const problem = validateFile(file);
     if (problem) {
       onError(problem);
       return;
     }
 
-    setUploading(true);
-    try {
-      await onUpload(file);
-    } finally {
-      setUploading(false);
-    }
+    if (editingUrl) URL.revokeObjectURL(editingUrl);
+    setEditingFile(file);
+    setEditingUrl(URL.createObjectURL(file));
+    setEditOptions(DEFAULT_EDIT_OPTIONS);
+    setPreviewError(null);
+  };
+
+  const closeEditor = () => {
+    if (editingUrl) URL.revokeObjectURL(editingUrl);
+    setEditingFile(null);
+    setEditingUrl(null);
+    setEditOptions(DEFAULT_EDIT_OPTIONS);
+    setPreviewError(null);
+  };
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = ''; // allow re-selecting the same file after an error
+    if (file) openEditor(file);
+  };
+
+  const handleDrop = (event: React.DragEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragActive(false);
+    const file = event.dataTransfer.files?.[0];
+    if (file) openEditor(file);
   };
 
   const handleDelete = async (photo: Photo) => {
@@ -88,6 +250,32 @@ export const PhotoGrid: React.FC<PhotoGridProps> = ({
     } finally {
       setPendingId(null);
     }
+  };
+
+  const handleUploadEditedPhoto = async () => {
+    if (!editingFile || !editingUrl) return;
+
+    setUploading(true);
+    setPreviewError(null);
+    try {
+      const canvas = await renderEditedImage(editingUrl, editOptions, EDIT_CANVAS_SIZE);
+      const editedFile = await canvasToJpegFile(canvas, editingFile.name);
+      if (editedFile.size > MAX_FILE_SIZE_BYTES) {
+        throw new Error('Edited image is larger than 5 MB. Try zooming/cropping less and upload again.');
+      }
+      await onUpload(editedFile);
+      closeEditor();
+    } catch (error: any) {
+      const message = error?.message || 'Failed to edit and upload photo';
+      setPreviewError(message);
+      onError(message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const patchEditOptions = (patch: Partial<EditOptions>) => {
+    setEditOptions((current) => ({ ...current, ...patch }));
   };
 
   return (
@@ -159,8 +347,25 @@ export const PhotoGrid: React.FC<PhotoGridProps> = ({
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
+            onDragEnter={(event) => {
+              event.preventDefault();
+              setDragActive(true);
+            }}
+            onDragOver={(event) => {
+              event.preventDefault();
+              setDragActive(true);
+            }}
+            onDragLeave={(event) => {
+              event.preventDefault();
+              setDragActive(false);
+            }}
+            onDrop={handleDrop}
             disabled={uploading}
-            className="aspect-square rounded-2xl border-2 border-dashed border-brand-border hover:border-brand-accent hover:bg-brand-accent/5 flex flex-col items-center justify-center gap-2 text-brand-muted hover:text-brand-accent transition-all duration-200 disabled:opacity-60 disabled:pointer-events-none"
+            className={`aspect-square rounded-2xl border-2 border-dashed flex flex-col items-center justify-center gap-2 transition-all duration-200 disabled:opacity-60 disabled:pointer-events-none ${
+              dragActive
+                ? 'border-brand-accent bg-brand-accent/10 text-brand-accent scale-[1.02]'
+                : 'border-brand-border hover:border-brand-accent hover:bg-brand-accent/5 text-brand-muted hover:text-brand-accent'
+            }`}
           >
             {uploading ? (
               <div className="w-6 h-6 border-3 border-brand-border border-t-brand-accent rounded-full animate-spin" />
@@ -175,6 +380,9 @@ export const PhotoGrid: React.FC<PhotoGridProps> = ({
                   />
                 </svg>
                 <span className="text-xs font-bold uppercase tracking-wider">Upload</span>
+                <span className="text-[11px] font-medium normal-case px-3 text-center">
+                  Click or drag photo here
+                </span>
               </>
             )}
           </button>
@@ -195,6 +403,146 @@ export const PhotoGrid: React.FC<PhotoGridProps> = ({
         {photos.length}/{maxPhotos} photos · JPEG, PNG or WebP · max 5 MB each
         {photos.length >= maxPhotos && ' · delete a photo to upload a new one'}
       </p>
+
+      {editingFile && editingUrl && (
+        <div className="fixed inset-0 z-50 bg-black/55 backdrop-blur-sm flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Edit photo before upload">
+          <div className="w-full max-w-3xl max-h-[92vh] overflow-y-auto bg-brand-surface rounded-3xl shadow-2xl border border-brand-border">
+            <div className="p-5 sm:p-6 border-b border-brand-border flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-lg font-black text-brand-text">Edit photo</h3>
+                <p className="text-sm text-brand-muted mt-1">
+                  Crop to a square, rotate, and choose a simple filter before uploading.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeEditor}
+                disabled={uploading}
+                className="w-9 h-9 rounded-full bg-brand-bg text-brand-muted hover:text-brand-text flex items-center justify-center transition-colors disabled:opacity-50"
+                aria-label="Close photo editor"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="p-5 sm:p-6 grid gap-5 lg:grid-cols-[minmax(0,1fr)_280px]">
+              <div>
+                <div className="aspect-square rounded-2xl overflow-hidden bg-brand-bg border border-brand-border flex items-center justify-center">
+                  {previewError ? (
+                    <p className="text-sm text-brand-error-text p-4 text-center">{previewError}</p>
+                  ) : (
+                    <canvas ref={previewCanvasRef} className="w-full h-full object-contain" />
+                  )}
+                </div>
+                <p className="text-xs text-brand-muted mt-2 truncate">Editing: {editingFile.name}</p>
+              </div>
+
+              <div className="space-y-5">
+                <div>
+                  <label htmlFor="photo-zoom" className="block text-xs font-black uppercase tracking-wider text-brand-text mb-2">
+                    Crop zoom
+                  </label>
+                  <input
+                    id="photo-zoom"
+                    type="range"
+                    min="1"
+                    max="3"
+                    step="0.05"
+                    value={editOptions.zoom}
+                    onChange={(event) => patchEditOptions({ zoom: Number(event.target.value) })}
+                    className="w-full accent-brand-accent"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="photo-offset-x" className="block text-xs font-black uppercase tracking-wider text-brand-text mb-2">
+                    Move left / right
+                  </label>
+                  <input
+                    id="photo-offset-x"
+                    type="range"
+                    min="-100"
+                    max="100"
+                    value={editOptions.offsetX}
+                    onChange={(event) => patchEditOptions({ offsetX: Number(event.target.value) })}
+                    className="w-full accent-brand-accent"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="photo-offset-y" className="block text-xs font-black uppercase tracking-wider text-brand-text mb-2">
+                    Move up / down
+                  </label>
+                  <input
+                    id="photo-offset-y"
+                    type="range"
+                    min="-100"
+                    max="100"
+                    value={editOptions.offsetY}
+                    onChange={(event) => patchEditOptions({ offsetY: Number(event.target.value) })}
+                    className="w-full accent-brand-accent"
+                  />
+                </div>
+
+                <div>
+                  <p className="block text-xs font-black uppercase tracking-wider text-brand-text mb-2">Rotate</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => patchEditOptions({ rotation: editOptions.rotation - 90 })}
+                      className="min-h-[42px] rounded-xl border border-brand-border text-sm font-bold text-brand-text hover:border-brand-accent hover:text-brand-accent transition-colors"
+                    >
+                      Left 90°
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => patchEditOptions({ rotation: editOptions.rotation + 90 })}
+                      className="min-h-[42px] rounded-xl border border-brand-border text-sm font-bold text-brand-text hover:border-brand-accent hover:text-brand-accent transition-colors"
+                    >
+                      Right 90°
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label htmlFor="photo-filter" className="block text-xs font-black uppercase tracking-wider text-brand-text mb-2">
+                    Filter
+                  </label>
+                  <select
+                    id="photo-filter"
+                    value={editOptions.filter}
+                    onChange={(event) => patchEditOptions({ filter: event.target.value as PhotoFilter })}
+                    className="w-full min-h-[42px] rounded-xl border border-brand-border bg-brand-bg px-3 text-sm font-semibold text-brand-text outline-none focus:border-brand-accent focus:ring-3 focus:ring-brand-accent/20"
+                  >
+                    {(Object.keys(FILTER_LABELS) as PhotoFilter[]).map((filter) => (
+                      <option key={filter} value={filter}>{FILTER_LABELS[filter]}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={closeEditor}
+                    disabled={uploading}
+                    className="min-h-[44px] rounded-full border border-brand-border text-sm font-black uppercase tracking-wider text-brand-muted hover:text-brand-text transition-colors disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleUploadEditedPhoto}
+                    disabled={uploading || !!previewError}
+                    className="min-h-[44px] rounded-full bg-gradient-to-br from-brand-start via-brand-mid to-brand-end text-white text-sm font-black uppercase tracking-wider shadow-lg shadow-brand-accent/20 hover:brightness-105 transition-all disabled:opacity-50 disabled:pointer-events-none"
+                  >
+                    {uploading ? 'Uploading…' : 'Upload'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
