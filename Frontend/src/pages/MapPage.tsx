@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { MapPin, Navigation, RefreshCw } from 'lucide-react';
+import { MapPin, Minus, Navigation, Plus, RefreshCw } from 'lucide-react';
 import { fetchSearchResults } from '../api/search';
 import { resolveMediaUrl } from '../api/profile';
 import { ErrorBanner } from '../components/common/ErrorBanner';
@@ -19,6 +19,31 @@ interface MapBounds {
   maxLng: number;
 }
 
+interface MapView {
+  centerLat: number;
+  centerLng: number;
+  zoom: number;
+}
+
+interface MapSize {
+  width: number;
+  height: number;
+}
+
+interface RenderViewport extends MapView, MapSize {
+  startX: number;
+  startY: number;
+  centerX: number;
+  centerY: number;
+}
+
+interface MapTile {
+  key: string;
+  url: string;
+  left: number;
+  top: number;
+}
+
 interface PositionedMapPoint extends MapPoint {
   screenX: number;
   screenY: number;
@@ -27,6 +52,30 @@ interface PositionedMapPoint extends MapPoint {
   spreadIndex: number;
   spreadCount: number;
 }
+
+interface MapCluster {
+  id: string;
+  screenX: number;
+  screenY: number;
+  points: PositionedMapPoint[];
+}
+
+interface DragState {
+  pointerId: number;
+  startClientX: number;
+  startClientY: number;
+  startCenterX: number;
+  startCenterY: number;
+}
+
+const TILE_SIZE = 256;
+const MIN_ZOOM = 5;
+const MAX_ZOOM = 16;
+const DEFAULT_MAP_VIEW: MapView = {
+  centerLat: 33.5731,
+  centerLng: -7.5898,
+  zoom: 8,
+};
 
 const isMappable = (profile: Suggestion): profile is MapPoint =>
   typeof profile.map_latitude === 'number' &&
@@ -46,22 +95,103 @@ const initialsFor = (profile: Suggestion): string =>
 
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 
-const projectPoint = (point: MapPoint, bounds: MapBounds) => {
-  const x = ((point.map_longitude - bounds.minLng) / (bounds.maxLng - bounds.minLng)) * 100;
-  const y = ((bounds.maxLat - point.map_latitude) / (bounds.maxLat - bounds.minLat)) * 100;
+const lonToTileX = (longitude: number, zoom: number): number => ((longitude + 180) / 360) * 2 ** zoom;
 
+const latToTileY = (latitude: number, zoom: number): number => {
+  const safeLatitude = clamp(latitude, -85.05112878, 85.05112878);
+  const radians = (safeLatitude * Math.PI) / 180;
+  return ((1 - Math.log(Math.tan(radians) + 1 / Math.cos(radians)) / Math.PI) / 2) * 2 ** zoom;
+};
+
+const lngLatToWorldPixel = (longitude: number, latitude: number, zoom: number) => ({
+  x: lonToTileX(longitude, zoom) * TILE_SIZE,
+  y: latToTileY(latitude, zoom) * TILE_SIZE,
+});
+
+const worldPixelToLngLat = (x: number, y: number, zoom: number) => {
+  const scale = TILE_SIZE * 2 ** zoom;
+  const longitude = (x / scale) * 360 - 180;
+  const n = Math.PI - (2 * Math.PI * y) / scale;
+  const latitude = (Math.atan(Math.sinh(n)) * 180) / Math.PI;
   return {
-    screenX: clamp(x, 5, 95),
-    screenY: clamp(y, 8, 92),
+    latitude: clamp(latitude, -85.05112878, 85.05112878),
+    longitude: ((((longitude + 180) % 360) + 360) % 360) - 180,
   };
 };
 
-const spreadDenseMapPoints = (points: MapPoint[], bounds: MapBounds | null): PositionedMapPoint[] => {
-  if (!bounds) {
+const createRenderViewport = (view: MapView, size: MapSize): RenderViewport | null => {
+  if (size.width <= 0 || size.height <= 0) return null;
+
+  const center = lngLatToWorldPixel(view.centerLng, view.centerLat, view.zoom);
+  return {
+    ...view,
+    ...size,
+    centerX: center.x,
+    centerY: center.y,
+    startX: center.x - size.width / 2,
+    startY: center.y - size.height / 2,
+  };
+};
+
+const createMapTiles = (viewport: RenderViewport | null): MapTile[] => {
+  if (!viewport) return [];
+
+  const minTileX = Math.floor(viewport.startX / TILE_SIZE);
+  const maxTileX = Math.floor((viewport.startX + viewport.width) / TILE_SIZE);
+  const minTileY = Math.floor(viewport.startY / TILE_SIZE);
+  const maxTileY = Math.floor((viewport.startY + viewport.height) / TILE_SIZE);
+  const tileCount = 2 ** viewport.zoom;
+  const tiles: MapTile[] = [];
+
+  for (let x = minTileX; x <= maxTileX; x += 1) {
+    for (let y = minTileY; y <= maxTileY; y += 1) {
+      if (y < 0 || y >= tileCount) continue;
+      const wrappedX = ((x % tileCount) + tileCount) % tileCount;
+      tiles.push({
+        key: `${viewport.zoom}-${x}-${y}`,
+        url: `https://tile.openstreetmap.org/${viewport.zoom}/${wrappedX}/${y}.png`,
+        left: x * TILE_SIZE - viewport.startX,
+        top: y * TILE_SIZE - viewport.startY,
+      });
+    }
+  }
+
+  return tiles;
+};
+
+const fitBoundsToSize = (bounds: MapBounds | null, size: MapSize): MapView => {
+  if (!bounds || size.width <= 0 || size.height <= 0) return DEFAULT_MAP_VIEW;
+
+  const centerLat = (bounds.minLat + bounds.maxLat) / 2;
+  const centerLng = (bounds.minLng + bounds.maxLng) / 2;
+  const usableWidth = Math.max(size.width - 120, 280);
+  const usableHeight = Math.max(size.height - 120, 280);
+
+  for (let zoom = MAX_ZOOM; zoom >= MIN_ZOOM; zoom -= 1) {
+    const northWest = lngLatToWorldPixel(bounds.minLng, bounds.maxLat, zoom);
+    const southEast = lngLatToWorldPixel(bounds.maxLng, bounds.minLat, zoom);
+    if (Math.abs(southEast.x - northWest.x) <= usableWidth && Math.abs(southEast.y - northWest.y) <= usableHeight) {
+      return { centerLat, centerLng, zoom };
+    }
+  }
+
+  return { centerLat, centerLng, zoom: MIN_ZOOM };
+};
+
+const projectPoint = (point: MapPoint, viewport: RenderViewport) => {
+  const projected = lngLatToWorldPixel(point.map_longitude, point.map_latitude, viewport.zoom);
+  return {
+    screenX: projected.x - viewport.startX,
+    screenY: projected.y - viewport.startY,
+  };
+};
+
+const positionMapPoints = (points: MapPoint[], viewport: RenderViewport | null): PositionedMapPoint[] => {
+  if (!viewport) {
     return points.map((point) => ({
       ...point,
-      screenX: 50,
-      screenY: 50,
+      screenX: 0,
+      screenY: 0,
       offsetX: 0,
       offsetY: 0,
       spreadIndex: 0,
@@ -69,54 +199,48 @@ const spreadDenseMapPoints = (points: MapPoint[], bounds: MapBounds | null): Pos
     }));
   }
 
-  const projected = points.map((point) => ({
-    point,
-    ...projectPoint(point, bounds),
+  return points.map((point, index) => ({
+    ...point,
+    ...projectPoint(point, viewport),
+    offsetX: 0,
+    offsetY: 0,
+    spreadIndex: index,
+    spreadCount: 1,
   }));
+};
 
-  const groups: typeof projected[] = [];
-  const groupDistance = 7;
+const getClusterRadius = (zoom: number): number => {
+  if (zoom <= 7) return 72;
+  if (zoom <= 9) return 56;
+  if (zoom <= 11) return 42;
+  if (zoom <= 13) return 32;
+  return 24;
+};
 
-  projected.forEach((candidate) => {
-    const group = groups.find((items) => {
-      const centerX = items.reduce((sum, item) => sum + item.screenX, 0) / items.length;
-      const centerY = items.reduce((sum, item) => sum + item.screenY, 0) / items.length;
-      return Math.hypot(candidate.screenX - centerX, candidate.screenY - centerY) < groupDistance;
-    });
+const clusterMapPoints = (points: PositionedMapPoint[], zoom: number): MapCluster[] => {
+  const radius = getClusterRadius(zoom);
+  const clusters: MapCluster[] = [];
 
-    if (group) {
-      group.push(candidate);
-    } else {
-      groups.push([candidate]);
-    }
-  });
+  points.forEach((point) => {
+    const cluster = clusters.find((candidate) => Math.hypot(point.screenX - candidate.screenX, point.screenY - candidate.screenY) < radius);
 
-  const positioned = new Map<number, PositionedMapPoint>();
-
-  groups.forEach((group) => {
-    const ordered = [...group].sort((a, b) => a.point.id - b.point.id);
-    const columns = Math.ceil(Math.sqrt(ordered.length));
-    const rows = Math.ceil(ordered.length / columns);
-    const markerGap = ordered.length > 16 ? 46 : 52;
-
-    ordered.forEach((item, index) => {
-      const shouldSpread = ordered.length > 1;
-      const column = index % columns;
-      const row = Math.floor(index / columns);
-
-      positioned.set(item.point.id, {
-        ...item.point,
-        screenX: item.screenX,
-        screenY: item.screenY,
-        offsetX: shouldSpread ? (column - (columns - 1) / 2) * markerGap : 0,
-        offsetY: shouldSpread ? (row - (rows - 1) / 2) * markerGap : 0,
-        spreadIndex: index,
-        spreadCount: ordered.length,
+    if (!cluster) {
+      clusters.push({
+        id: `cluster-${point.id}`,
+        screenX: point.screenX,
+        screenY: point.screenY,
+        points: [point],
       });
-    });
+      return;
+    }
+
+    cluster.points.push(point);
+    cluster.screenX = cluster.points.reduce((sum, item) => sum + item.screenX, 0) / cluster.points.length;
+    cluster.screenY = cluster.points.reduce((sum, item) => sum + item.screenY, 0) / cluster.points.length;
+    cluster.id = `cluster-${cluster.points.map((item) => item.id).sort((a, b) => a - b).join('-')}`;
   });
 
-  return projected.map((item) => positioned.get(item.point.id)).filter(Boolean) as PositionedMapPoint[];
+  return clusters;
 };
 
 export const MapPage: React.FC = () => {
@@ -124,6 +248,11 @@ export const MapPage: React.FC = () => {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [mapSize, setMapSize] = useState<MapSize>({ width: 0, height: 0 });
+  const [mapView, setMapView] = useState<MapView>(DEFAULT_MAP_VIEW);
+  const mapRef = useRef<HTMLElement | null>(null);
+  const dragRef = useRef<DragState | null>(null);
+  const fittedSignatureRef = useRef<string>('');
 
   const loadProfiles = async () => {
     setLoading(true);
@@ -142,6 +271,21 @@ export const MapPage: React.FC = () => {
 
   useEffect(() => {
     void loadProfiles();
+  }, []);
+
+  useEffect(() => {
+    const element = mapRef.current;
+    if (!element) return undefined;
+
+    const updateSize = () => {
+      const rect = element.getBoundingClientRect();
+      setMapSize({ width: rect.width, height: rect.height });
+    };
+
+    updateSize();
+    const resizeObserver = new ResizeObserver(updateSize);
+    resizeObserver.observe(element);
+    return () => resizeObserver.disconnect();
   }, []);
 
   const points = useMemo(() => profiles.filter(isMappable), [profiles]);
@@ -164,16 +308,120 @@ export const MapPage: React.FC = () => {
     };
   }, [points]);
 
-  const positionedPoints = useMemo(() => spreadDenseMapPoints(points, bounds), [points, bounds]);
+  const pointSignature = useMemo(
+    () => points.map((point) => `${point.id}:${point.map_latitude.toFixed(5)}:${point.map_longitude.toFixed(5)}`).join('|'),
+    [points],
+  );
+
+  useEffect(() => {
+    const fitSignature = `${pointSignature}:${Math.round(mapSize.width)}x${Math.round(mapSize.height)}`;
+    if (fittedSignatureRef.current === fitSignature) return;
+    fittedSignatureRef.current = fitSignature;
+    setMapView(fitBoundsToSize(bounds, mapSize));
+  }, [bounds, mapSize, pointSignature]);
+
+  const renderViewport = useMemo(() => createRenderViewport(mapView, mapSize), [mapView, mapSize]);
+  const mapTiles = useMemo(() => createMapTiles(renderViewport), [renderViewport]);
+  const positionedPoints = useMemo(() => positionMapPoints(points, renderViewport), [points, renderViewport]);
+  const mapClusters = useMemo(() => clusterMapPoints(positionedPoints, mapView.zoom), [positionedPoints, mapView.zoom]);
   const selected = positionedPoints.find((profile) => profile.id === selectedId) ?? positionedPoints[0] ?? null;
 
+  const setViewFromCenterPixel = useCallback((centerX: number, centerY: number, zoom: number) => {
+    const center = worldPixelToLngLat(centerX, centerY, zoom);
+    setMapView({ centerLat: center.latitude, centerLng: center.longitude, zoom });
+  }, []);
+
+  const zoomAtPoint = useCallback(
+    (nextZoom: number, anchorX?: number, anchorY?: number) => {
+      if (!renderViewport) return;
+      const zoom = clamp(nextZoom, MIN_ZOOM, MAX_ZOOM);
+      if (zoom === renderViewport.zoom) return;
+
+      const x = anchorX ?? renderViewport.width / 2;
+      const y = anchorY ?? renderViewport.height / 2;
+      const anchorWorldX = renderViewport.startX + x;
+      const anchorWorldY = renderViewport.startY + y;
+      const anchorLatLng = worldPixelToLngLat(anchorWorldX, anchorWorldY, renderViewport.zoom);
+      const nextAnchorWorld = lngLatToWorldPixel(anchorLatLng.longitude, anchorLatLng.latitude, zoom);
+      const nextCenterX = nextAnchorWorld.x - (x - renderViewport.width / 2);
+      const nextCenterY = nextAnchorWorld.y - (y - renderViewport.height / 2);
+      setViewFromCenterPixel(nextCenterX, nextCenterY, zoom);
+    },
+    [renderViewport, setViewFromCenterPixel],
+  );
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLElement>) => {
+    if (!renderViewport) return;
+    const target = event.target as HTMLElement;
+    if (target.closest('button,a')) return;
+
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startCenterX: renderViewport.centerX,
+      startCenterY: renderViewport.centerY,
+    };
+  };
+
+  const handlePointerMove = (event: React.PointerEvent<HTMLElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - drag.startClientX;
+    const deltaY = event.clientY - drag.startClientY;
+    setViewFromCenterPixel(drag.startCenterX - deltaX, drag.startCenterY - deltaY, mapView.zoom);
+  };
+
+  const handlePointerEnd = (event: React.PointerEvent<HTMLElement>) => {
+    if (dragRef.current?.pointerId === event.pointerId) {
+      dragRef.current = null;
+    }
+  };
+
+  const handleWheel = (event: React.WheelEvent<HTMLElement>) => {
+    if (!renderViewport) return;
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const nextZoom = renderViewport.zoom + (event.deltaY < 0 ? 1 : -1);
+    zoomAtPoint(nextZoom, event.clientX - rect.left, event.clientY - rect.top);
+  };
+
   const markerStyle = (point: PositionedMapPoint, active: boolean): React.CSSProperties => ({
-    left: `${point.screenX}%`,
-    top: `${point.screenY}%`,
-    transform: `translate(calc(-50% + ${point.offsetX}px), calc(-100% + ${point.offsetY}px)) scale(${active ? 1.08 : 1})`,
+    left: `${point.screenX}px`,
+    top: `${point.screenY}px`,
+    transform: `translate(-50%, -100%) scale(${active ? 1.08 : 1})`,
     zIndex: active ? 100 : 20 + Math.min(point.spreadIndex, 20),
     willChange: 'transform',
   });
+
+  const clusterStyle = (cluster: MapCluster): React.CSSProperties => ({
+    left: `${cluster.screenX}px`,
+    top: `${cluster.screenY}px`,
+    transform: 'translate(-50%, -50%)',
+    zIndex: 90,
+  });
+
+  const focusCluster = (cluster: MapCluster) => {
+    if (cluster.points.length === 1) {
+      setSelectedId(cluster.points[0].id);
+      return;
+    }
+
+    const centerLat = cluster.points.reduce((sum, point) => sum + point.map_latitude, 0) / cluster.points.length;
+    const centerLng = cluster.points.reduce((sum, point) => sum + point.map_longitude, 0) / cluster.points.length;
+
+    if (mapView.zoom >= MAX_ZOOM) {
+      setSelectedId(cluster.points[0].id);
+      return;
+    }
+
+    setMapView({
+      centerLat,
+      centerLng,
+      zoom: Math.min(MAX_ZOOM, mapView.zoom + 2),
+    });
+  };
 
   return (
     <div className="min-h-screen w-full bg-brand-bg">
@@ -203,47 +451,129 @@ export const MapPage: React.FC = () => {
               <p className="text-xs font-black uppercase tracking-wider text-brand-text flex items-center gap-2">
                 <Navigation className="w-4 h-4 text-brand-accent" /> Matcha Map
               </p>
-              <p className="text-xs text-brand-muted">{points.length} users with GPS area</p>
+              <p className="text-xs text-brand-muted">{points.length} users with GPS area · zoom {mapView.zoom}</p>
             </div>
 
-            <section className="relative min-h-[560px] rounded-3xl overflow-hidden border border-brand-border bg-brand-surface shadow-md">
-              <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.65)_1px,transparent_1px),linear-gradient(0deg,rgba(255,255,255,0.65)_1px,transparent_1px)] bg-[size:42px_42px]" />
-              <div className="absolute inset-0 bg-gradient-to-br from-emerald-100 via-sky-100 to-pink-100" />
-              <div className="absolute inset-0 opacity-50 bg-[radial-gradient(circle_at_20%_20%,rgba(255,255,255,0.9),transparent_24%),radial-gradient(circle_at_80%_35%,rgba(255,255,255,0.85),transparent_22%),radial-gradient(circle_at_45%_80%,rgba(255,255,255,0.75),transparent_28%)]" />
-
-            {loading ? (
-              <div className="absolute inset-0 z-10 flex items-center justify-center">
-                <div className="w-12 h-12 border-4 border-white/70 border-t-brand-accent rounded-full animate-spin" />
-              </div>
-            ) : points.length === 0 ? (
-              <div className="absolute inset-0 z-10 flex items-center justify-center p-6 text-center">
-                <div className="bg-white/90 backdrop-blur rounded-3xl border border-white/70 shadow-md p-6 max-w-md">
-                  <MapPin className="w-10 h-10 mx-auto text-brand-muted mb-3" />
-                  <h2 className="font-black text-brand-text">No mappable users yet</h2>
-                  <p className="text-sm text-brand-muted mt-1">
-                    Users need GPS-based location enabled to appear on the map. Research and Browse still show text-location users.
-                  </p>
+            <section
+              ref={mapRef}
+              className="relative h-[560px] rounded-3xl overflow-hidden border border-brand-border bg-slate-100 shadow-md touch-none cursor-grab active:cursor-grabbing select-none"
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerEnd}
+              onPointerCancel={handlePointerEnd}
+              onWheel={handleWheel}
+              onDoubleClick={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                zoomAtPoint(mapView.zoom + 1, event.clientX - rect.left, event.clientY - rect.top);
+              }}
+              aria-label="Interactive map of nearby Matcha members"
+            >
+              <div className="absolute inset-0 bg-slate-100" />
+              {mapTiles.length > 0 ? (
+                <div className="absolute inset-0 overflow-hidden" aria-hidden="true">
+                  {mapTiles.map((tile) => (
+                    <img
+                      key={tile.key}
+                      src={tile.url}
+                      alt=""
+                      draggable={false}
+                      className="absolute max-w-none select-none"
+                      style={{
+                        left: `${tile.left}px`,
+                        top: `${tile.top}px`,
+                        width: `${TILE_SIZE}px`,
+                        height: `${TILE_SIZE}px`,
+                      }}
+                    />
+                  ))}
                 </div>
+              ) : (
+                <div className="absolute inset-0 bg-gradient-to-br from-emerald-100 via-sky-100 to-pink-100" />
+              )}
+
+              <div className="absolute left-4 top-4 z-[120] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-md">
+                <button
+                  type="button"
+                  onClick={() => zoomAtPoint(mapView.zoom + 1)}
+                  className="flex h-11 w-11 items-center justify-center text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                  disabled={mapView.zoom >= MAX_ZOOM}
+                  aria-label="Zoom in"
+                >
+                  <Plus className="h-5 w-5" />
+                </button>
+                <div className="h-px bg-slate-200" />
+                <button
+                  type="button"
+                  onClick={() => zoomAtPoint(mapView.zoom - 1)}
+                  className="flex h-11 w-11 items-center justify-center text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                  disabled={mapView.zoom <= MIN_ZOOM}
+                  aria-label="Zoom out"
+                >
+                  <Minus className="h-5 w-5" />
+                </button>
               </div>
-            ) : (
-              positionedPoints.map((point) => {
-                const active = selected?.id === point.id;
-                return (
-                  <button
-                    key={point.id}
-                    type="button"
-                    onClick={() => setSelectedId(point.id)}
-                    style={markerStyle(point, active)}
-                    className="absolute focus:outline-none focus-visible:ring-4 focus-visible:ring-brand-accent/30 rounded-full transition-transform"
-                    aria-label={`Show ${point.first_name} on map${point.spreadCount > 1 ? `, ${point.spreadCount} nearby users spread out` : ''}`}
-                  >
-                    <span className={`relative flex items-center justify-center w-11 h-11 rounded-full shadow-lg border-2 ${active ? 'bg-brand-accent text-white border-white' : 'bg-white text-brand-accent border-brand-accent/30'}`}>
-                      <MapPin className="w-6 h-6" fill="currentColor" />
-                    </span>
-                  </button>
-                );
-              })
-            )}
+
+              <button
+                type="button"
+                onClick={() => setMapView(fitBoundsToSize(bounds, mapSize))}
+                className="absolute left-4 top-[112px] z-[120] rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black uppercase tracking-wider text-slate-700 shadow-md hover:bg-slate-50"
+              >
+                Fit
+              </button>
+
+              <div className="absolute bottom-2 right-3 z-[120] rounded bg-white/90 px-2 py-1 text-[10px] font-semibold text-slate-600 shadow-sm">
+                © OpenStreetMap contributors
+              </div>
+
+              {loading ? (
+                <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/20">
+                  <div className="w-12 h-12 border-4 border-white/70 border-t-brand-accent rounded-full animate-spin" />
+                </div>
+              ) : points.length === 0 ? (
+                <div className="absolute inset-0 z-10 flex items-center justify-center p-6 text-center">
+                  <div className="bg-white/90 backdrop-blur rounded-3xl border border-white/70 shadow-md p-6 max-w-md">
+                    <MapPin className="w-10 h-10 mx-auto text-brand-muted mb-3" />
+                    <h2 className="font-black text-brand-text">No mappable users yet</h2>
+                    <p className="text-sm text-brand-muted mt-1">
+                      Users need GPS-based location enabled to appear on the map. Research and Browse still show text-location users.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                mapClusters.map((cluster) => {
+                  if (cluster.points.length > 1) {
+                    return (
+                      <button
+                        key={cluster.id}
+                        type="button"
+                        onClick={() => focusCluster(cluster)}
+                        style={clusterStyle(cluster)}
+                        className="absolute flex h-12 min-w-12 items-center justify-center rounded-full border-4 border-white bg-brand-accent px-3 text-sm font-black text-white shadow-lg transition-transform hover:scale-105 focus:outline-none focus-visible:ring-4 focus-visible:ring-brand-accent/30"
+                        aria-label={`Zoom into ${cluster.points.length} nearby members`}
+                      >
+                        {cluster.points.length}
+                      </button>
+                    );
+                  }
+
+                  const point = cluster.points[0];
+                  const active = selected?.id === point.id;
+                  return (
+                    <button
+                      key={point.id}
+                      type="button"
+                      onClick={() => setSelectedId(point.id)}
+                      style={markerStyle(point, active)}
+                      className="absolute rounded-full transition-transform focus:outline-none focus-visible:ring-4 focus-visible:ring-brand-accent/30"
+                      aria-label={`Show ${point.first_name} on map`}
+                    >
+                      <span className={`relative flex items-center justify-center w-12 h-12 rounded-full shadow-lg border-4 ${active ? 'bg-brand-accent text-white border-white' : 'bg-white text-brand-accent border-brand-accent/30'}`}>
+                        <MapPin className="w-7 h-7" fill="currentColor" />
+                      </span>
+                    </button>
+                  );
+                })
+              )}
             </section>
           </div>
 
