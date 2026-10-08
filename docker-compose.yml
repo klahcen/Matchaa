@@ -52,12 +52,12 @@ services:
 
   backend:
     build:
-      context: ./backend
+      context: ./Backend
       dockerfile: Dockerfile
     container_name: matcha-backend
     restart: unless-stopped
     env_file:
-      - ./backend/.env
+      - ./Backend/.env
     environment:
       DB_HOST: matcha-pg
       DB_PORT: 5432
@@ -67,7 +67,7 @@ services:
       db:
         condition: service_healthy
     volumes:
-      - ./backend:/app
+      - ./Backend:/app
       - /app/node_modules
     networks:
       - matcha-network
