@@ -29,7 +29,8 @@ run: setup logs
 
 setup: start migrate seed urls
 
-up: start urls
+# Keep an existing database in sync with the code on every normal start.
+up: start migrate urls
 
 # `up` without printing the addresses (used by `setup`, which prints them at the end).
 start: cert

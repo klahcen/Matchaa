@@ -167,6 +167,26 @@ CREATE TABLE IF NOT EXISTS notifications (
 
 CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications (user_id, is_read) WHERE is_read = FALSE;
+CREATE INDEX IF NOT EXISTS idx_notifications_dedupe
+    ON notifications (user_id, related_user_id, type, created_at DESC);
+
+-- Notification suppression after a user removes a like.
+CREATE TABLE IF NOT EXISTS notification_mutes (
+    user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    muted_user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, muted_user_id),
+    CONSTRAINT notification_mutes_no_self_mute CHECK (user_id <> muted_user_id)
+);
+
+-- Private swipe-left history, used to avoid dealing the same profile again.
+CREATE TABLE IF NOT EXISTS passes (
+    user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    passed_user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, passed_user_id),
+    CONSTRAINT passes_no_self_pass CHECK (user_id <> passed_user_id)
+);
 
 -- Bonus date/event proposals between connected users.
 CREATE TABLE IF NOT EXISTS dates (
