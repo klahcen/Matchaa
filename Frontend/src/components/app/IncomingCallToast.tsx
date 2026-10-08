@@ -26,10 +26,12 @@ export const IncomingCallToast: React.FC = () => {
       <div className="grid grid-cols-2 gap-2 mt-4">
         <button
           type="button"
-          onClick={() => navigate(`/chat/${incomingCall.fromUserId}`)}
+          onClick={() => navigate(`/chat/${incomingCall.fromUserId}`, {
+            state: { answerIncomingCallId: incomingCall.callId },
+          })}
           className="inline-flex items-center justify-center gap-1.5 min-h-[42px] rounded-full bg-emerald-500 text-white text-xs font-black uppercase tracking-wider"
         >
-          <Phone className="w-4 h-4" /> Open
+          <Phone className="w-4 h-4" /> Answer
         </button>
         <button
           type="button"

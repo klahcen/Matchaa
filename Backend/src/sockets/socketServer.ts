@@ -395,10 +395,13 @@ export const initializeSocketServer = (httpServer: HttpServer): Server => {
       try {
         const callerId = parsePeerId(data?.callerId);
         if (!callerId) return callback?.({ success: false, error: 'Invalid caller' });
+        const callId = parseCallId(data?.callId);
+        if (!callId) return callback?.({ success: false, error: 'Invalid call' });
         if (!(await canSignalCall(userId, callerId, callback))) return;
 
-        clearPendingCall(callerId, userId, data.callId);
-        io.to(`user:${callerId}`).emit('call:accepted', { callId: data.callId, fromUserId: userId });
+        const call = clearPendingCall(callerId, userId, callId);
+        if (!call) return callback?.({ success: false, error: 'This call is no longer available' });
+        io.to(`user:${callerId}`).emit('call:accepted', { callId, fromUserId: userId });
         callback?.({ success: true });
       } catch (error) {
         failSocketEvent(callback, 'Error accepting call', 'Failed to accept call', error);

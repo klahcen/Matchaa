@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { CalendarDays, Check, MessageCircle, Mic, MicOff, Phone, PhoneOff, Send, CheckCheck, Video, VideoOff, X } from 'lucide-react';
 import { chatApi } from '../api/chat';
 import { dateApi } from '../api/date';
@@ -41,6 +41,7 @@ const createCallId = (): string =>
 
 export const ChatPage: React.FC = () => {
   const { user } = useAuth();
+  const location = useLocation();
   const navigate = useNavigate();
   const { userId } = useParams<{ userId: string }>();
   const {
@@ -89,6 +90,10 @@ export const ChatPage: React.FC = () => {
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const currentCallRef = useRef<{ callId: string; peerId: number } | null>(null);
+  const acceptingCallIdRef = useRef<string | null>(null);
+  const autoAnsweredCallIdRef = useRef<string | null>(null);
+  const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const connectionTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -208,20 +213,30 @@ export const ChatPage: React.FC = () => {
 
 
   const attachLocalStream = useCallback((stream: MediaStream | null) => {
-    if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+    if (!localVideoRef.current) return;
+    localVideoRef.current.srcObject = stream;
+    if (stream) void localVideoRef.current.play().catch(() => undefined);
   }, []);
 
   const attachRemoteStream = useCallback((stream: MediaStream | null) => {
-    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = stream;
+    if (!remoteVideoRef.current) return;
+    remoteVideoRef.current.srcObject = stream;
+    if (stream) void remoteVideoRef.current.play().catch(() => undefined);
   }, []);
 
   const finishCall = useCallback((notice?: string) => {
+    if (connectionTimeoutRef.current !== null) {
+      window.clearTimeout(connectionTimeoutRef.current);
+      connectionTimeoutRef.current = null;
+    }
     peerConnectionRef.current?.close();
     peerConnectionRef.current = null;
     localStreamRef.current?.getTracks().forEach((track) => track.stop());
     localStreamRef.current = null;
     remoteStreamRef.current = null;
     currentCallRef.current = null;
+    acceptingCallIdRef.current = null;
+    pendingIceCandidatesRef.current = [];
     attachLocalStream(null);
     attachRemoteStream(null);
     setCallPhase('idle');
@@ -248,6 +263,7 @@ export const ChatPage: React.FC = () => {
 
   const createPeerConnection = useCallback((peerId: number, callId: string) => {
     peerConnectionRef.current?.close();
+    pendingIceCandidatesRef.current = [];
     remoteStreamRef.current = new MediaStream();
     attachRemoteStream(remoteStreamRef.current);
 
@@ -268,12 +284,40 @@ export const ChatPage: React.FC = () => {
       });
       remoteStreamRef.current = remoteStream;
       attachRemoteStream(remoteStream);
+      if (connectionTimeoutRef.current !== null) {
+        window.clearTimeout(connectionTimeoutRef.current);
+        connectionTimeoutRef.current = null;
+      }
       setCallPhase('active');
+    };
+
+    peer.onconnectionstatechange = () => {
+      if (peer.connectionState === 'connected') {
+        if (connectionTimeoutRef.current !== null) {
+          window.clearTimeout(connectionTimeoutRef.current);
+          connectionTimeoutRef.current = null;
+        }
+        setCallPhase('active');
+      } else if (peer.connectionState === 'failed') {
+        socket?.emit('call:end', { receiverId: peerId, callId });
+        finishCall('The call connection failed. Check that both devices are on the same network and try again.');
+      }
     };
 
     peerConnectionRef.current = peer;
     return peer;
-  }, [attachRemoteStream, socket]);
+  }, [attachRemoteStream, finishCall, socket]);
+
+  const startConnectionTimeout = useCallback(() => {
+    if (connectionTimeoutRef.current !== null) window.clearTimeout(connectionTimeoutRef.current);
+    connectionTimeoutRef.current = window.setTimeout(() => {
+      const activeCall = currentCallRef.current;
+      if (activeCall && socket) {
+        socket.emit('call:end', { receiverId: activeCall.peerId, callId: activeCall.callId });
+      }
+      finishCall('The call could not connect. Check the other device and try again.');
+    }, 20_000);
+  }, [finishCall, socket]);
 
   const startCall = useCallback(async (type: CallType) => {
     if (!targetUser || !socket || callPhase !== 'idle') return;
@@ -301,27 +345,44 @@ export const ChatPage: React.FC = () => {
   const acceptCall = useCallback(async () => {
     if (!incomingCall || !socket) return;
 
+    const call = incomingCall;
+    acceptingCallIdRef.current = call.callId;
+
     setCallError(null);
-    setCallType(incomingCall.callType);
-    setCallPeerName(incomingCall.from_user?.first_name || 'Incoming call');
+    setCallType(call.callType);
+    setCallPeerName(call.from_user?.first_name || 'Incoming call');
     setCallPhase('connecting');
+    let acceptedByServer = false;
 
     try {
-      const stream = await prepareLocalMedia(incomingCall.callType);
-      const peer = createPeerConnection(incomingCall.fromUserId, incomingCall.callId);
+      const stream = await prepareLocalMedia(call.callType);
+      const peer = createPeerConnection(call.fromUserId, call.callId);
       stream.getTracks().forEach((track) => peer.addTrack(track, stream));
-      currentCallRef.current = { callId: incomingCall.callId, peerId: incomingCall.fromUserId };
-      socket.emit('call:accept', { callerId: incomingCall.fromUserId, callId: incomingCall.callId }, (response: any) => {
-        if (!response?.success) finishCall(response?.error || 'Could not accept call');
-      });
+      currentCallRef.current = { callId: call.callId, peerId: call.fromUserId };
+
+      const response = await socket.timeout(10_000).emitWithAck('call:accept', {
+        callerId: call.fromUserId,
+        callId: call.callId,
+      }) as { success?: boolean; error?: string };
+      if (!response?.success) throw new Error(response?.error || 'Could not accept call');
+      acceptedByServer = true;
+
+      acceptingCallIdRef.current = null;
       clearIncomingCall();
-      if (!isConversationView || targetUserId !== incomingCall.fromUserId) {
-        navigate(`/chat/${incomingCall.fromUserId}`);
+      startConnectionTimeout();
+      if (!isConversationView || targetUserId !== call.fromUserId) {
+        navigate(`/chat/${call.fromUserId}`);
       }
     } catch (err: any) {
-      finishCall(err?.message || 'Could not accept call');
+      socket.emit(acceptedByServer ? 'call:end' : 'call:reject', acceptedByServer
+        ? { receiverId: call.fromUserId, callId: call.callId }
+        : { callerId: call.fromUserId, callId: call.callId });
+      const message = err?.name === 'NotAllowedError'
+        ? 'Microphone/camera permission was denied. Allow access in the browser and try again.'
+        : err?.message || 'Could not accept call';
+      finishCall(message);
     }
-  }, [clearIncomingCall, createPeerConnection, finishCall, incomingCall, isConversationView, navigate, prepareLocalMedia, socket, targetUserId]);
+  }, [clearIncomingCall, createPeerConnection, finishCall, incomingCall, isConversationView, navigate, prepareLocalMedia, socket, startConnectionTimeout, targetUserId]);
 
   const rejectIncomingCall = useCallback(() => {
     rejectSharedIncomingCall();
@@ -358,6 +419,10 @@ export const ChatPage: React.FC = () => {
   useEffect(() => {
     if (!incomingCall || !isConversationView || targetUserId !== incomingCall.fromUserId) return;
 
+    // Accepting intentionally moves to `connecting` while getUserMedia is
+    // pending. Do not mistake that transition for a second/busy call.
+    if (acceptingCallIdRef.current === incomingCall.callId) return;
+
     if (currentCallRef.current || (callPhase !== 'idle' && callPhase !== 'incoming')) {
       rejectSharedIncomingCall();
       return;
@@ -369,6 +434,19 @@ export const ChatPage: React.FC = () => {
     setCallPhase('incoming');
   }, [callPhase, incomingCall, isConversationView, rejectSharedIncomingCall, targetUserId]);
 
+  // The global incoming-call popup can answer in one click. It navigates here
+  // with the call id, and this page owns media capture and WebRTC negotiation.
+  useEffect(() => {
+    const requestedCallId = (location.state as { answerIncomingCallId?: string } | null)?.answerIncomingCallId;
+    if (!requestedCallId || incomingCall?.callId !== requestedCallId) return;
+    if (!isConversationView || targetUserId !== incomingCall.fromUserId) return;
+    if (autoAnsweredCallIdRef.current === requestedCallId) return;
+
+    autoAnsweredCallIdRef.current = requestedCallId;
+    navigate(location.pathname, { replace: true, state: null });
+    void acceptCall();
+  }, [acceptCall, incomingCall, isConversationView, location.pathname, location.state, navigate, targetUserId]);
+
   useEffect(() => {
     if (!socket) return;
 
@@ -379,6 +457,7 @@ export const ChatPage: React.FC = () => {
 
       try {
         setCallPhase('connecting');
+        startConnectionTimeout();
         const offer = await peer.createOffer();
         await peer.setLocalDescription(offer);
         socket.emit('call:offer', { receiverId: data.fromUserId, callId: data.callId, offer });
@@ -394,6 +473,8 @@ export const ChatPage: React.FC = () => {
 
       try {
         await peer.setRemoteDescription(data.offer);
+        const queuedCandidates = pendingIceCandidatesRef.current.splice(0);
+        await Promise.allSettled(queuedCandidates.map((candidate) => peer.addIceCandidate(candidate)));
         const answer = await peer.createAnswer();
         await peer.setLocalDescription(answer);
         socket.emit('call:answer', { receiverId: data.fromUserId, callId: data.callId, answer });
@@ -410,6 +491,8 @@ export const ChatPage: React.FC = () => {
 
       try {
         await peer.setRemoteDescription(data.answer);
+        const queuedCandidates = pendingIceCandidatesRef.current.splice(0);
+        await Promise.allSettled(queuedCandidates.map((candidate) => peer.addIceCandidate(candidate)));
         setCallPhase('active');
       } catch (err: any) {
         finishCall(err?.message || 'Could not finish call connection');
@@ -420,6 +503,10 @@ export const ChatPage: React.FC = () => {
       const activeCall = currentCallRef.current;
       const peer = peerConnectionRef.current;
       if (!activeCall || !peer || activeCall.callId !== data.callId) return;
+      if (!peer.remoteDescription) {
+        pendingIceCandidatesRef.current.push(data.candidate);
+        return;
+      }
       try {
         await peer.addIceCandidate(data.candidate);
       } catch {
@@ -454,7 +541,15 @@ export const ChatPage: React.FC = () => {
       socket.off('call:cancelled', handleEnded);
       socket.off('call:ended', handleEnded);
     };
-  }, [finishCall, incomingCall?.callId, socket]);
+  }, [finishCall, incomingCall?.callId, socket, startConnectionTimeout]);
+
+  // Reattach streams after the call panel mounts; media permission can resolve
+  // before React has rendered its audio/video elements.
+  useEffect(() => {
+    if (callPhase === 'idle' || callPhase === 'incoming') return;
+    attachLocalStream(localStreamRef.current);
+    attachRemoteStream(remoteStreamRef.current);
+  }, [attachLocalStream, attachRemoteStream, callPhase, callType]);
 
   useEffect(() => () => finishCall(), [finishCall]);
 
