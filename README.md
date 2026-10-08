@@ -164,9 +164,23 @@ The Makefile provides shortcuts for running the complete stack:
 ```bash
 make build       # Build the application images
 make setup       # Start services, apply migrations, and seed sample users
+make up          # Generate a local HTTPS certificate and start services
+make cert-info   # Show how to trust the development CA on phones/laptops
 make logs        # Follow application logs
 make down        # Stop and remove containers
 ```
+
+`make up` serves the frontend at `https://localhost:5173` and prints a second
+URL using the computer's LAN IP for phones and other computers. The generated
+certificate covers both `localhost` and the current LAN IP. Before opening the
+app on another device, run `make cert-info` and install
+`.certs/matcha-local-ca.pem` as a trusted certificate authority on that device.
+Only share the `.pem` CA certificate; `.certs/matcha-local-ca.key` is private.
+
+If the computer's LAN IP changes, the next `make up` automatically issues a new
+server certificate. Trusting the CA is a one-time step because the CA itself is
+reused. A trusted certificate is required for browsers to grant camera and
+microphone access over the local network.
 
 Use a different number of generated profiles with:
 

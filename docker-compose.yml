@@ -44,11 +44,14 @@ services:
       # The Vite dev proxy runs inside this container, so it must reach the
       # backend by its service name rather than localhost.
       - VITE_PROXY_TARGET=http://backend:3000
+      - VITE_HTTPS_KEY=/certs/dev-key.pem
+      - VITE_HTTPS_CERT=/certs/dev-cert.pem
     depends_on:
       - backend
     volumes:
       - ./Frontend:/app
       - /app/node_modules
+      - ./.certs:/certs:ro
     networks:
       - matcha-network
 

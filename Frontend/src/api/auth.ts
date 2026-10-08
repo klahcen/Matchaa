@@ -8,8 +8,9 @@ import type {
 } from '../types/auth';
 import { toApiError } from './http';
 
+// Same-origin by default: the Vite dev server proxies /api to the backend.
 const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000/api/auth';
+  import.meta.env.VITE_API_BASE_URL || '/api/auth';
 
 /**
  * Hard ceiling on any single API call. Without this, a backend that accepts the

@@ -9,6 +9,9 @@ node_modules
 
 dist
 
+# Locally generated HTTPS certificate authority and private keys
+.certs/
+
 
 test-reports/
 

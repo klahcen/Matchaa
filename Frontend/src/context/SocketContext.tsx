@@ -34,7 +34,9 @@ interface SocketContextType {
 
 const SocketContext = createContext<SocketContextType | undefined>(undefined);
 
-const API_ORIGIN = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/api.*$/, '') || 'http://localhost:3000';
+// Same origin by default: the Vite dev server proxies /socket.io to the backend.
+const API_ORIGIN =
+  (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/api.*$/, '') || window.location.origin;
 
 export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, isLoading } = useAuth();

@@ -18,11 +18,14 @@ import { toApiError } from './http';
  * feature is never touched. The API root is derived defensively: it accepts
  * either "http://localhost:3000/api" or the legacy auth-scoped
  * "http://localhost:3000/api/auth" in VITE_API_BASE_URL and normalizes both.
+ *
+ * Unset (the default), it is the same-origin "/api" that the Vite dev server
+ * proxies to the backend, so the app works from any device on the network.
  */
 
 const configured = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '';
 
-export const API_ROOT = (configured.trim() || 'http://localhost:3000/api')
+export const API_ROOT = (configured.trim() || '/api')
   .replace(/\/auth\/?$/, '')
   .replace(/\/+$/, '');
 
