@@ -49,7 +49,7 @@ export const SocialListLayout: React.FC<SocialListLayoutProps> = ({
   }, [load]);
 
   return (
-    <div className="min-h-screen w-full bg-brand-bg p-4 sm:p-6">
+    <div className="flex-1 w-full bg-brand-bg p-4 sm:p-6">
       <div className="max-w-2xl mx-auto">
         <div className="bg-brand-surface rounded-3xl shadow-2xl p-5 sm:p-8">
           <h1 className="text-xl sm:text-2xl font-black text-brand-text">{title}</h1>

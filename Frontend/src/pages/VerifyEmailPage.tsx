@@ -4,16 +4,20 @@ import { authApi } from '../api/auth';
 import { AuthCard } from '../components/common/AuthCard';
 import { ErrorBanner } from '../components/common/ErrorBanner';
 import { PrimaryButton } from '../components/common/PrimaryButton';
+import { useAuth } from '../context/AuthContext';
 
 export const VerifyEmailPage: React.FC = () => {
   const { token: paramToken } = useParams<{ token: string }>();
   const [searchParams] = useSearchParams();
   const token = paramToken || searchParams.get('token');
+  // Signed in when confirming an email change from the profile page.
+  const { user, setUser } = useAuth();
 
   // Initialized from the token so a URL with no token renders the error state
   // immediately, instead of flashing a spinner before an effect corrects it.
   const [loading, setLoading] = useState<boolean>(Boolean(token));
   const [success, setSuccess] = useState(false);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(
     token ? null : 'No verification token provided.'
   );
@@ -34,9 +38,15 @@ export const VerifyEmailPage: React.FC = () => {
     const performVerification = async () => {
       setLoading(true);
       try {
-        await authApi.verifyEmail(token, { signal: controller.signal });
+        const response = await authApi.verifyEmail(token, { signal: controller.signal });
         setSuccess(true);
+        setSuccessMessage(response.message || null);
         setErrorMessage(null);
+        // An email change just became active: refresh the cached session user.
+        const verified = response.user;
+        if (verified) {
+          setUser((current) => (current && current.id === verified.id ? { ...current, ...verified } : current));
+        }
       } catch (err: any) {
         // This run was cancelled by our own cleanup (StrictMode remount, token
         // change, or unmount). A newer run owns the state now — or nothing does,
@@ -59,7 +69,7 @@ export const VerifyEmailPage: React.FC = () => {
     return () => {
       controller.abort();
     };
-  }, [token]);
+  }, [token, setUser]);
 
   // Loading state
   if (loading) {
@@ -94,14 +104,23 @@ export const VerifyEmailPage: React.FC = () => {
             </svg>
           </div>
 
-          <p className="text-brand-text font-medium mb-2">Welcome to the community!</p>
+          <p className="text-brand-text font-medium mb-2">
+            {user ? 'All set!' : 'Welcome to the community!'}
+          </p>
           <p className="text-xs text-brand-muted mb-8 leading-relaxed max-w-xs">
-            Your email has been confirmed. You can now log in and begin discovering matches near you.
+            {successMessage ||
+              'Your email has been confirmed. You can now log in and begin discovering matches near you.'}
           </p>
 
-          <Link to="/login" className="w-full">
-            <PrimaryButton type="button">Go to Login</PrimaryButton>
-          </Link>
+          {user ? (
+            <Link to="/profile" className="w-full">
+              <PrimaryButton type="button">Back to my profile</PrimaryButton>
+            </Link>
+          ) : (
+            <Link to="/login" className="w-full">
+              <PrimaryButton type="button">Go to Login</PrimaryButton>
+            </Link>
+          )}
         </div>
       </AuthCard>
     );

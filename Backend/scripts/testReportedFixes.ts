@@ -42,7 +42,7 @@ async function main() {
         VALUES($1,$2,$3,'Audit',$4,true,$5) RETURNING *`,
         [`${prefix}${suffix}@example.invalid`, prefix + suffix, name, hash, suffix === 'a' ? 'male' : 'female']))[0];
       ids.push(user.id);
-      user.cookie = 'token=' + generateAuthToken({ userId: user.id, username: user.username, email: user.email });
+      user.cookie = 'token=' + generateAuthToken({ userId: user.id, username: user.username, email: user.email, tv: user.token_version ?? 0 });
       if (suffix === 'a') a = user; else b = user;
     }
     await test('F3', async () => {
@@ -57,7 +57,8 @@ async function main() {
     });
     await test('F5', async () => {
       const evidence = [];
-      for (const [route, cap] of [['login',10],['register',10],['forgot-password',5],['resend-verification',5]] as const) {
+      // login counts failed attempts per IP+username; register allows 30 requests per IP
+      for (const [route, cap] of [['login',10],['register',30],['forgot-password',5],['resend-verification',5]] as const) {
         const statuses = [];
         for (let i=0;i<cap+2;i++) {
           const payload = route === 'login' ? {username:prefix+'missing',password:'wrong'} : {};

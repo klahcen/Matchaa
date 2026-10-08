@@ -84,6 +84,11 @@ export const validateUsername = (username: unknown): string => {
 
   const trimmed = username.trim();
 
+  // Usernames are shown on public profiles, so an email here would expose it.
+  if (trimmed.includes('@')) {
+    throw AppError.badRequest("Your username is public, so it can't be an email address");
+  }
+
   if (trimmed.length < 3 || trimmed.length > 30) {
     throw AppError.badRequest('Username must be between 3 and 30 characters');
   }
@@ -157,22 +162,64 @@ export const validatePassword = (password: unknown): string => {
   }
 
   // Dictionary check against data/common-passwords.txt
-  const commonPasswords = loadCommonPasswords();
-  const normalized = password.toLowerCase().trim();
-
-  if (commonPasswords.has(normalized)) {
-    throw AppError.badRequest('Password is too common and easily guessable. Please choose a stronger password.');
+  if (isDictionaryPassword(password)) {
+    throw AppError.badRequest(
+      'Password is too common or based on a dictionary word. Please choose a less guessable password.'
+    );
   }
 
   return password;
 };
 
-const validateOptionalBinaryGender = (
+// Common leetspeak substitutions, undone before the dictionary lookup ("P@ssw0rd" -> "password").
+const LEET_MAP: Record<string, string> = { '0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's', '7': 't', '@': 'a', '$': 's' };
+
+const undoLeet = (value: string): string => value.replace(/[013457@$]/g, (char) => LEET_MAP[char]);
+const trimNonLetters = (value: string): string => value.replace(/^[^a-z]+|[^a-z]+$/g, '');
+const trimTrailingNonLetters = (value: string): string => value.replace(/[^a-z]+$/, '');
+const lettersOnly = (value: string): string => value.replace(/[^a-z]/g, '');
+
+/**
+ * Returns the word "cores" a password is likely built from, so decorated dictionary
+ * words ("Bonjour123!", "S0leil2024!", "@zerty1!") are caught, not only exact matches.
+ * Edge runs of digits/symbols are stripped both before and after undoing leetspeak:
+ * stripping first keeps a trailing "1" from turning into an "i", while undoing first
+ * recovers a leading "@" or "4" that stands for an "a".
+ */
+export const getPasswordDictionaryCandidates = (password: string): string[] => {
+  // Accents are dropped so "Été2024!" or "Cariño1!" match the ASCII wordlist.
+  const lower = password.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const core = trimNonLetters(lower);
+  const forms = [
+    core,
+    undoLeet(core),
+    trimNonLetters(undoLeet(lower)),
+    trimNonLetters(undoLeet(trimTrailingNonLetters(lower))),
+  ];
+  const candidates = new Set<string>([lower]);
+  for (const form of forms) {
+    candidates.add(form);
+    candidates.add(lettersOnly(form));
+  }
+  return [...candidates].filter((candidate) => candidate.length >= 3);
+};
+
+/**
+ * True when the password, or any of its word cores, is in the common-password dictionary.
+ */
+export const isDictionaryPassword = (password: string): boolean => {
+  const commonPasswords = loadCommonPasswords();
+  return getPasswordDictionaryCandidates(password).some((candidate) => commonPasswords.has(candidate));
+};
+
+const validateBinaryGender = (
   value: unknown,
   fieldName: 'Gender' | 'Sexual preference'
-): 'male' | 'female' | undefined => {
-  if (value === undefined) return undefined;
-  if (typeof value !== 'string' || !value.trim()) {
+): 'male' | 'female' => {
+  if (value === undefined || value === null || (typeof value === 'string' && !value.trim())) {
+    throw AppError.badRequest(`${fieldName} is required (male or female)`);
+  }
+  if (typeof value !== 'string') {
     throw AppError.badRequest(`${fieldName} must be either male or female`);
   }
   const normalized = value.trim().toLowerCase();
@@ -182,11 +229,17 @@ const validateOptionalBinaryGender = (
   return normalized;
 };
 
+/** Registration data once validated: gender and preference are mandatory. */
+export type ValidatedRegistration = RegisterDTO & {
+  gender: 'male' | 'female';
+  sexualPreferences: 'male' | 'female';
+};
+
 /**
  * Manual Registration DTO Validator
  * Supports camelCase (firstName, lastName) and snake_case (first_name, last_name).
  */
-export const validateRegistrationDTO = (body: any): RegisterDTO => {
+export const validateRegistrationDTO = (body: any): ValidatedRegistration => {
   if (!body || typeof body !== 'object') {
     throw AppError.badRequest('Request body must be a valid JSON object');
   }
@@ -196,8 +249,8 @@ export const validateRegistrationDTO = (body: any): RegisterDTO => {
   const firstName = validateName(body.firstName ?? body.first_name, 'First name');
   const lastName = validateName(body.lastName ?? body.last_name, 'Last name');
   const password = validatePassword(body.password);
-  const gender = validateOptionalBinaryGender(body.gender, 'Gender');
-  const sexualPreferences = validateOptionalBinaryGender(
+  const gender = validateBinaryGender(body.gender, 'Gender');
+  const sexualPreferences = validateBinaryGender(
     body.sexual_preferences ?? body.sexualPreference ?? body.sexualPreferences,
     'Sexual preference'
   );
@@ -280,10 +333,19 @@ export const generateSecureToken = (): string => {
   return crypto.randomBytes(32).toString('hex');
 };
 
+/** JWT claims; tv is the user's token_version when the token was signed. */
+export type AuthTokenPayload = JwtPayload & { tv?: number };
+
 /**
  * Generates a signed JWT authentication token for a user.
+ * tv must be the user's current token_version; bumping it later revokes the token.
  */
-export const generateAuthToken = (payload: { userId: number; username: string; email: string }): string => {
+export const generateAuthToken = (payload: {
+  userId: number;
+  username: string;
+  email: string;
+  tv: number;
+}): string => {
   return jwt.sign(payload, env.JWT_SECRET, {
     expiresIn: env.JWT_EXPIRES_IN as jwt.SignOptions['expiresIn'],
   });
@@ -292,9 +354,9 @@ export const generateAuthToken = (payload: { userId: number; username: string; e
 /**
  * Verifies and decodes a signed JWT authentication token.
  */
-export const verifyAuthToken = (token: string): JwtPayload => {
+export const verifyAuthToken = (token: string): AuthTokenPayload => {
   try {
-    return jwt.verify(token, env.JWT_SECRET) as JwtPayload;
+    return jwt.verify(token, env.JWT_SECRET) as AuthTokenPayload;
   } catch (error: any) {
     if (error.name === 'TokenExpiredError') {
       throw AppError.unauthorized('Authentication token has expired. Please log in again.');
@@ -313,6 +375,7 @@ export const toSafeUser = (user: User): SafeUser => {
     verification_token_expires_at,
     reset_token,
     reset_token_expires_at,
+    token_version,
     ...safe
   } = user;
   return safe;

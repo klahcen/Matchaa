@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS users (
     verification_token_expires_at TIMESTAMPTZ DEFAULT NULL,
     reset_token VARCHAR(255) DEFAULT NULL,
     reset_token_expires_at TIMESTAMPTZ DEFAULT NULL,
+    -- Incremented on logout/password reset to revoke every JWT issued before.
+    token_version INTEGER NOT NULL DEFAULT 0,
 
     -- Profile fields
     gender user_gender NOT NULL DEFAULT 'male',

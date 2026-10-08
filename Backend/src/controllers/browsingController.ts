@@ -7,6 +7,8 @@ import {
   findSuggestions,
   getViewerOrientation,
 } from '../db/queries/browsingQueries';
+import { clearPasses, createPass } from '../db/queries/passQueries';
+import { findUserById } from '../db/queries/userQueries';
 import { AuthenticatedRequest } from '../types';
 import { AppError } from '../utils/AppError';
 import {
@@ -38,7 +40,8 @@ export class BrowsingController {
    * Query params (all optional and combinable):
    *   minAge, maxAge, minFame, maxFame, location, tags,
    *   sortBy (relevance|age|location|fame|commonTags), sortOrder (asc|desc),
-   *   page (>=1), limit (1..50, default 20)
+   *   page (>=1), limit (1..50, default 20),
+   *   swipe (true|false): hide profiles the viewer already liked or passed on
    *
    * Returns a paginated list of profile summaries plus the total match count.
    */
@@ -62,6 +65,13 @@ export class BrowsingController {
 
       const { page, limit, offset } = parsePagination(q.page, q.limit);
 
+      // Swipe mode hides profiles the viewer already liked or passed on.
+      const swipeRaw = Array.isArray(q.swipe) ? q.swipe[0] : q.swipe;
+      if (swipeRaw !== undefined && !['true', 'false', '1', '0'].includes(String(swipeRaw))) {
+        throw AppError.badRequest(`swipe must be true or false (got "${String(swipeRaw)}")`);
+      }
+      const swipe = swipeRaw === 'true' || swipeRaw === '1';
+
       const filters: BrowseFilters = {
         ...(age.min !== undefined ? { minAge: age.min } : {}),
         ...(age.max !== undefined ? { maxAge: age.max } : {}),
@@ -69,6 +79,7 @@ export class BrowsingController {
         ...(fame.max !== undefined ? { maxFame: fame.max } : {}),
         ...(location !== undefined ? { location } : {}),
         ...(tags !== undefined ? { tags } : {}),
+        ...(swipe ? { excludeSwipedBy: viewerId } : {}),
       };
 
       const pagination: BrowsePagination = { limit, offset };
@@ -111,6 +122,47 @@ export class BrowsingController {
           orientation: orientationPayload,
         },
       });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * POST /api/browse/passes/:userId
+   *
+   * Swipe left: hides that profile from the viewer's swipe deck. Private — it
+   * notifies no one and changes nothing for the other user.
+   */
+  static async pass(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const viewerId = req.user!.id;
+      const targetId = Number.parseInt(String(req.params.userId), 10);
+      if (!Number.isFinite(targetId) || targetId <= 0) {
+        throw AppError.badRequest('A valid positive user id is required');
+      }
+      if (targetId === viewerId) {
+        throw AppError.badRequest('You cannot pass on yourself');
+      }
+      if (!(await findUserById(targetId))) {
+        throw AppError.notFound('This profile does not exist');
+      }
+
+      await createPass(viewerId, targetId);
+      res.status(201).json({ success: true, message: 'Passed', data: { user_id: targetId } });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * DELETE /api/browse/passes
+   *
+   * "Start over": forgets every pass so those profiles can be dealt again.
+   */
+  static async resetPasses(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const cleared = await clearPasses(req.user!.id);
+      res.status(200).json({ success: true, message: 'Passed profiles restored', data: { cleared } });
     } catch (error) {
       next(error);
     }

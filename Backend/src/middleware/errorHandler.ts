@@ -39,6 +39,27 @@ export const errorHandler = (
     return;
   }
 
+  // Handle other body-parser errors (oversized body, unsupported charset, aborted request...).
+  // Keep their 4xx status but never echo the parser's own message back to the client.
+  if (err?.type === 'entity.too.large') {
+    res.status(413).json({
+      success: false,
+      message: 'Request body is too large',
+    });
+    return;
+  }
+
+  // Any other client error with a 4xx status: exposed http-errors from body-parser, and router
+  // param decoding failures (e.g. "/api/users/%E0"), which are URIErrors tagged with status 400.
+  const clientStatus = Number(err?.status ?? err?.statusCode);
+  if ((err?.expose === true || err instanceof URIError) && clientStatus >= 400 && clientStatus < 500) {
+    res.status(clientStatus).json({
+      success: false,
+      message: typeof err.type === 'string' ? 'Invalid request body' : 'Invalid request',
+    });
+    return;
+  }
+
   // Handle multer upload errors (size limit, unexpected field, no file) as 400s
   // so oversized/invalid uploads never surface as an opaque 500.
   if (err?.name === 'MulterError') {

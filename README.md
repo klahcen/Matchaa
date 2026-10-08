@@ -35,7 +35,31 @@ Matchaa/
 
 ## Environment configuration
 
-Create `Backend/.env` and keep it out of version control:
+Credentials live only in local `.env` files. Git ignores every `.env` and
+`.env.*` file; only the `.env.example` templates are committed.
+
+`JWT_SECRET` and `DB_PASSWORD` are required and have no default: without them
+the backend prints the missing variable names and refuses to start.
+
+**Docker.** Compose reads the root `.env`. Its `POSTGRES_PASSWORD` sets the
+database password and is passed to the backend as `DB_PASSWORD` (Compose also
+refuses to start without it). The backend container loads `./.env`, then
+`./Backend/.env` (both optional; the later file wins), and Compose sets
+`DB_HOST`/`DB_PORT` to `matcha-pg:5432`. A minimal root `.env`:
+
+```env
+POSTGRES_PASSWORD=replace_with_a_local_password
+JWT_SECRET=replace_with_a_long_random_secret
+RESEND_API_KEY=replace_with_your_resend_key
+```
+
+PostgreSQL applies `POSTGRES_PASSWORD` only when its volume is first created.
+If you change it later, either change it in the database with `ALTER USER`
+or recreate the volume with `docker compose down -v`, which deletes all data.
+
+**Backend on your machine.** It reads `Backend/.env`, then the root `.env`.
+Set `DB_PASSWORD` to the same value as `POSTGRES_PASSWORD`, and use
+`DB_PORT=5433` because Docker publishes PostgreSQL on host port `5433`:
 
 ```env
 PORT=3000
@@ -55,12 +79,16 @@ MAIL_FROM=onboarding@resend.dev
 
 APP_URL=http://localhost:3000
 CLIENT_URL=http://localhost:5173
-CORS_ORIGIN=http://localhost:5173
 ```
 
-When the backend runs directly on your machine, use `DB_PORT=5433` because
-Docker publishes PostgreSQL on host port `5433`. When the backend runs inside
-Docker, Compose overrides the database connection to `matcha-pg:5432`.
+Optional variables:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `POSTGRES_HOST_PORT` | `5433` | Host port that Docker publishes PostgreSQL on |
+| `ADMINER_HOST_PORT` | `8080` | Host port that Docker publishes Adminer on |
+| `CORS_ORIGIN` | `CLIENT_URL` | Allowed browser origins, comma-separated. `*` is ignored |
+| `SEED_PASSWORD` | random | Password for seeded accounts. If unset, the seed script prints a random one |
 
 Create the frontend environment file:
 

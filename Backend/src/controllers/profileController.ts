@@ -1,16 +1,15 @@
 import { NextFunction, Response } from 'express';
 import {
-  countUserPhotos,
-  getUserPhotos,
-  deletePhotoRow,
+  deletePhotoForUser,
   findLikesForUser,
   findPhotoById,
   findProfileById,
   findViewsForUser,
-  insertPhoto,
+  insertPhotoWithinLimit,
   setProfilePicture,
   updateProfile,
   FullProfile,
+  PhotoRow,
   ProfileUpdateData,
 } from '../db/queries/profileQueries';
 import { findUserByEmail } from '../db/queries/userQueries';
@@ -22,8 +21,11 @@ import {
   removeTagFromUser,
   searchTags,
 } from '../db/queries/tagQueries';
-import { recalculateFameRating } from '../services/fameRatingService';
-import { reverseGeocode } from '../services/geocodingService';
+import {
+  evaluateProfileCompletion,
+  recalculateFameRating,
+} from '../services/fameRatingService';
+import { geocodeLocation, reverseGeocode } from '../services/geocodingService';
 import {
   finalizeUploadedImage,
   MAX_PHOTOS_PER_USER,
@@ -188,23 +190,39 @@ const parsePositiveIntParam = (raw: unknown, label: string): number => {
   return parsed;
 };
 
+/** Stored location_text is VARCHAR(255); provider names can be longer. */
+const fitLocationText = (text: string): string =>
+  text.length > MAX_LOCATION_TEXT_LENGTH ? text.slice(0, MAX_LOCATION_TEXT_LENGTH).trim() : text;
+
 /**
  * Normalizes a profile for the owning user: never leaks password_hash or any
  * token column.
  *
- * profile_picture_url is strictly the flagged photo — it deliberately does NOT
- * fall back to the first uploaded photo, so that deleting the profile picture
- * leaves the user with none until they explicitly choose a new one.
+ * profile_picture_url is strictly the flagged photo (deleting it auto-promotes
+ * the oldest remaining photo, so it is only null when the user has no photos).
+ *
+ * profile_complete / profile_missing come from the same evaluateProfileCompletion
+ * used by the fame bonus and the requireCompleteProfile gate.
+ * pending_email is the address awaiting confirmation after an email change.
  */
 const toProfileResponse = (profile: FullProfile) => {
   const profilePicture = profile.photos.find((p) => p.is_profile_picture) ?? null;
+  const completion = evaluateProfileCompletion({
+    biography: profile.biography,
+    tagCount: profile.tags.length,
+    hasProfilePicture: profilePicture !== null,
+    locationText: profile.location_text,
+  });
   return {
     ...profile,
+    pending_email: profile.pending_email ?? null,
     sexual_preferences: profile.sexual_preferences || DEFAULT_SEXUAL_PREFERENCE,
     profile_picture_url: profilePicture?.url ?? null,
     photo_count: profile.photos.length,
     max_photos: MAX_PHOTOS_PER_USER,
     has_profile_picture: profilePicture !== null,
+    profile_complete: completion.complete,
+    profile_missing: completion.missing,
   };
 };
 
@@ -215,7 +233,8 @@ const toProfileResponse = (profile: FullProfile) => {
 export class ProfileController {
   /**
    * GET /api/profile/me
-   * Full profile of the logged-in user, including tags and photos.
+   * Full profile of the logged-in user, including tags and photos, plus
+   * profile_complete / profile_missing and pending_email.
    */
   static async getMe(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -289,20 +308,29 @@ export class ProfileController {
       if (data.pendingEmail && data.verificationToken) {
         try {
           await sendVerificationEmail(data.pendingEmail, updated.username, data.verificationToken);
-          message = 'Profile updated. Check your new email address to confirm the change.';
+          message =
+            `Profile updated. We sent a confirmation link to ${data.pendingEmail}. ` +
+            `Your email stays ${updated.email} until you click it.`;
         } catch (error: any) {
           console.error('[ProfileController] Failed to send email-change verification:', error.message);
-          message = 'Profile updated, but the verification email could not be sent. Submit the new email again to retry.';
+          message =
+            `Profile updated, but we could not send the confirmation email to ${data.pendingEmail}. ` +
+            'Submit the new email again to retry.';
         }
+      } else if (updated.pending_email) {
+        message = `Profile updated. Your email change to ${updated.pending_email} is still waiting for confirmation.`;
       }
 
       // Completing the bio (or clearing it) changes the +10 completion bonus.
       const fameRating = await recalculateFameRating(userId);
 
       const profile = await findProfileById(userId);
+      // pending_email is repeated at the top level so the client can show the
+      // "confirm your new address" state without digging into the profile.
       res.status(200).json({
         success: true,
         message,
+        pending_email: profile?.pending_email ?? updated.pending_email ?? null,
         data: profile ? { ...toProfileResponse(profile), fame_rating: fameRating } : undefined,
       });
     } catch (error) {
@@ -317,7 +345,15 @@ export class ProfileController {
    *  - { lat, lng }        GPS positioning with explicit consent. Reverse-geocoded
    *                        through Nominatim into location_text; precise coords stored.
    *  - { locationText }    Manual fallback when GPS is declined/unavailable.
-   *                        Coordinates are cleared, since they were not GPS-derived.
+   *                        Forward-geocoded to the city/neighbourhood centre, so
+   *                        distance, sorting and the map work for manual users too;
+   *                        the normalized place name replaces the typed text.
+   *
+   * Responses: 200 { data: { latitude, longitude, location_text, location_source,
+   * fame_rating } }; 400 when the place cannot be found; 503 when the location
+   * service is unreachable or rate-limited (nothing is saved in either case).
+   * There is no IP-based or other implicit fallback: a location is only ever
+   * stored from what the user explicitly shared or typed.
    */
   static async updateLocation(
     req: AuthenticatedRequest,
@@ -356,25 +392,47 @@ export class ProfileController {
           locationText = fallback;
         }
 
+        locationText = fitLocationText(locationText);
         await updateProfile(userId, { locationLat: lat, locationLng: lng, locationText });
         const fameRating = await recalculateFameRating(userId);
 
         res.status(200).json({
           success: true,
-          message: 'Location updated',
-          data: { latitude: lat, longitude: lng, location_text: locationText, fame_rating: fameRating },
+          message: `Location set to ${locationText}`,
+          data: {
+            latitude: lat,
+            longitude: lng,
+            location_text: locationText,
+            location_source: 'gps',
+            fame_rating: fameRating,
+          },
         });
         return;
       }
 
-      const locationText = validateLocationText(body.locationText ?? body.location_text);
-      await updateProfile(userId, { locationLat: null, locationLng: null, locationText });
+      // Resolve the typed place BEFORE writing anything: an unknown place (400)
+      // or an unavailable provider (503) leaves the stored location untouched.
+      const typed = validateLocationText(body.locationText ?? body.location_text);
+      const geocoded = await geocodeLocation(typed);
+      const locationText = fitLocationText(geocoded.resolvedText);
+
+      await updateProfile(userId, {
+        locationLat: geocoded.lat,
+        locationLng: geocoded.lng,
+        locationText,
+      });
       const fameRating = await recalculateFameRating(userId);
 
       res.status(200).json({
         success: true,
-        message: 'Location updated',
-        data: { latitude: null, longitude: null, location_text: locationText, fame_rating: fameRating },
+        message: `Location set to ${locationText}`,
+        data: {
+          latitude: geocoded.lat,
+          longitude: geocoded.lng,
+          location_text: locationText,
+          location_source: 'manual',
+          fame_rating: fameRating,
+        },
       });
     } catch (error) {
       next(error);
@@ -491,9 +549,10 @@ export class ProfileController {
    * POST /api/profile/me/photos  (multipart/form-data, field name: "photo")
    *
    * Multer has already run (route-level middleware) and enforced the MIME type,
-   * extension and 5 MB size limit. Here we enforce the 5-photos-per-user cap,
-   * verify the real file bytes, then insert the row. The first photo a user
-   * uploads is automatically marked as their profile picture.
+   * extension and 5 MB size limit. Here we verify the real file bytes, then
+   * insert the row under a per-user lock that also enforces the 5-photo cap, so
+   * parallel uploads cannot exceed it. A photo uploaded while the user has no
+   * profile picture (e.g. their first) becomes the profile picture.
    */
   static async uploadPhoto(
     req: AuthenticatedRequest,
@@ -510,26 +569,29 @@ export class ProfileController {
         );
       }
 
-      const existingCount = await countUserPhotos(userId);
-      if (existingCount >= MAX_PHOTOS_PER_USER) {
+      // Rejects (and deletes) files whose bytes are not a real JPEG/PNG/WebP.
+      const url = finalizeUploadedImage(file);
+
+      let photo: PhotoRow | null;
+      try {
+        photo = await insertPhotoWithinLimit(userId, url, MAX_PHOTOS_PER_USER);
+      } catch (error) {
+        safeUnlink(file.path);
+        throw error;
+      }
+      if (!photo) {
         safeUnlink(file.path);
         throw AppError.badRequest(
           `You already have the maximum of ${MAX_PHOTOS_PER_USER} photos. Delete one before uploading another.`
         );
       }
 
-      // Rejects (and deletes) files whose bytes are not a real JPEG/PNG/WebP.
-      const url = finalizeUploadedImage(file);
-
-      const isFirstPhoto = existingCount === 0;
-      const photo = await insertPhoto(userId, url, isFirstPhoto);
-
       // A first photo can flip the profile to "complete" (+10).
       const fameRating = await recalculateFameRating(userId);
 
       res.status(201).json({
         success: true,
-        message: isFirstPhoto
+        message: photo.is_profile_picture
           ? 'Photo uploaded and set as your profile picture'
           : 'Photo uploaded',
         data: { ...photo, fame_rating: fameRating },
@@ -541,9 +603,9 @@ export class ProfileController {
 
   /**
    * DELETE /api/profile/me/photos/:photoId
-   * Removes the file and the row. If the deleted photo was the profile picture,
-   * no other photo is auto-promoted — the user must explicitly choose a new one,
-   * and the response reflects that no profile picture is currently set.
+   * Removes the row and the file. If the deleted photo was the profile picture,
+   * the oldest remaining photo is promoted in the same transaction
+   * (promoted_photo_id); with no photos left, no profile picture is set.
    */
   static async deletePhoto(
     req: AuthenticatedRequest,
@@ -562,27 +624,36 @@ export class ProfileController {
         throw AppError.forbidden('You can only delete your own photos');
       }
 
-      const wasProfilePicture = photo.is_profile_picture;
+      const result = await deletePhotoForUser(photoId, userId);
+      if (!result) {
+        // Deleted by a concurrent request between the lookup and the lock.
+        throw AppError.notFound('Photo not found');
+      }
 
-      await deletePhotoRow(photoId);
-
-      const filePath = resolveUploadPath(photo.url);
+      const filePath = resolveUploadPath(result.deleted.url);
       if (filePath) safeUnlink(filePath);
 
       // Losing the last photo can drop the +10 completion bonus.
       const fameRating = await recalculateFameRating(userId);
-      const remaining = await getUserPhotos(userId);
+
+      const wasProfilePicture = result.deleted.is_profile_picture;
+      const hasProfilePicture = result.remainingCount > 0;
+      let message = 'Photo deleted';
+      if (result.promoted) {
+        message = 'Photo deleted. Your oldest remaining photo is now your profile picture.';
+      } else if (!hasProfilePicture) {
+        message = 'Photo deleted. You have no photos left: upload one to set a profile picture.';
+      }
 
       res.status(200).json({
         success: true,
-        message: wasProfilePicture
-          ? 'Photo deleted. No profile picture is set — choose one from your remaining photos.'
-          : 'Photo deleted',
+        message,
         data: {
           deleted_id: photoId,
           was_profile_picture: wasProfilePicture,
-          has_profile_picture: remaining.some((p) => p.is_profile_picture),
-          photo_count: remaining.length,
+          has_profile_picture: hasProfilePicture,
+          promoted_photo_id: result.promoted?.id ?? null,
+          photo_count: result.remainingCount,
           fame_rating: fameRating,
         },
       });
@@ -611,7 +682,11 @@ export class ProfileController {
         throw AppError.forbidden('You can only change your own profile picture');
       }
 
-      await setProfilePicture(photoId, userId);
+      const updated = await setProfilePicture(photoId, userId);
+      if (!updated) {
+        // Deleted by a concurrent request between the lookup and the lock.
+        throw AppError.notFound('Photo not found');
+      }
 
       res.status(200).json({
         success: true,

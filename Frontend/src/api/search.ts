@@ -1,3 +1,4 @@
+import { toApiError } from './http';
 import { API_ROOT } from './profile';
 import type { SearchQuery, SearchResponse } from '../types/search';
 
@@ -76,11 +77,7 @@ export const fetchSearchResults = async (
     }
 
     if (!response.ok) {
-      const message =
-        body?.message ||
-        (Array.isArray(body?.errors) && body.errors.length > 0 ? body.errors.join(', ') : null) ||
-        `Request failed with status ${response.status}`;
-      throw new Error(message);
+      throw toApiError(response, body);
     }
 
     if (!body?.data) throw new Error('Malformed response from the search endpoint');

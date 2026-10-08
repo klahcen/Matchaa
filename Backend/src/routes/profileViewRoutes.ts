@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { ProfileViewController } from '../controllers/profileViewController';
 import { requireAuth } from '../middleware/authMiddleware';
+import { requireCompleteProfile } from '../middleware/requireCompleteProfile';
 
 /**
  * Profile View routes — mounted at /api/users.
@@ -14,8 +15,8 @@ const router = Router();
 // Full public profile + relationship flags; also appends to the views history log.
 router.get('/:userId', requireAuth, ProfileViewController.getProfile);
 
-// Like / unlike
-router.post('/:userId/like', requireAuth, ProfileViewController.like);
+// Like / unlike (liking requires a complete profile; unliking never does)
+router.post('/:userId/like', requireAuth, requireCompleteProfile, ProfileViewController.like);
 router.delete('/:userId/like', requireAuth, ProfileViewController.unlike);
 
 // Block / unblock

@@ -78,6 +78,8 @@ export interface BrowseQuery {
   sortOrder?: SortOrder;
   page?: number;
   limit?: number;
+  /** Swipe mode: hide profiles already liked or passed on. */
+  swipe?: boolean;
 }
 
 /** Values held by the filter panel before they are applied. */

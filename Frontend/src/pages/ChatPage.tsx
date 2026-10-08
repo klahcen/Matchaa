@@ -15,10 +15,11 @@ import type { CallType } from '../types/call';
 
 const MESSAGE_PAGE_SIZE = 50;
 
+/** Earliest selectable slot (30 min from now) as a LOCAL `datetime-local` value. */
 const minDateTimeLocal = (): string => {
   const date = new Date(Date.now() + 30 * 60 * 1000);
-  date.setSeconds(0, 0);
-  return date.toISOString().slice(0, 16);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 };
 
 const formatDateProposalTime = (value: string): string => {
@@ -44,6 +45,7 @@ export const ChatPage: React.FC = () => {
   const { userId } = useParams<{ userId: string }>();
   const {
     socket,
+    isConnected,
     conversations,
     unreadMessageCount,
     incomingCall,
@@ -51,6 +53,7 @@ export const ChatPage: React.FC = () => {
     rejectIncomingCall: rejectSharedIncomingCall,
     setConversations,
     markConversationRead,
+    setActiveConversation,
   } = useSocket();
 
   const currentUserId = user?.id ?? 0;
@@ -104,7 +107,7 @@ export const ChatPage: React.FC = () => {
       const data = await chatApi.getConversations();
       setConversations(data.conversations);
     } catch (err: any) {
-      console.error('Failed to load conversations:', err);
+      setError(err?.message ?? 'Failed to load conversations');
     }
   }, [setConversations]);
 
@@ -130,16 +133,15 @@ export const ChatPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    loadConversations();
+    void loadConversations();
   }, [loadConversations]);
 
   const loadDateProposals = useCallback(async (otherUserId: number, signal?: AbortSignal) => {
     try {
       const data = await dateApi.getWithUser(otherUserId, signal);
       setDateProposals(data.dates);
-    } catch (err: any) {
-      if (signal?.aborted) return;
-      console.error('Failed to load date proposals:', err);
+    } catch {
+      // Date proposals are an optional panel; the chat stays usable without them.
     }
   }, []);
 
@@ -187,6 +189,22 @@ export const ChatPage: React.FC = () => {
     void loadDateProposals(targetUser.id, controller.signal);
     return () => controller.abort();
   }, [loadDateProposals, targetUser]);
+
+  const activeChatId = targetUser?.id ?? null;
+
+  // While a conversation is open its incoming messages are read on arrival, so
+  // the shared context must not count them as unread.
+  useEffect(() => {
+    setActiveConversation(activeChatId);
+    return () => setActiveConversation(null);
+  }, [activeChatId, setActiveConversation]);
+
+  // Opening a conversation (or reconnecting with one open) marks it read on the
+  // server too, so the unread badge does not come back after a refresh.
+  useEffect(() => {
+    if (!socket || !isConnected || activeChatId === null) return;
+    socket.emit('message:read', { peerId: activeChatId });
+  }, [activeChatId, isConnected, socket]);
 
 
   const attachLocalStream = useCallback((stream: MediaStream | null) => {
@@ -404,8 +422,8 @@ export const ChatPage: React.FC = () => {
       if (!activeCall || !peer || activeCall.callId !== data.callId) return;
       try {
         await peer.addIceCandidate(data.candidate);
-      } catch (err) {
-        console.error('Failed to add ICE candidate:', err);
+      } catch {
+        // A late or duplicate candidate is harmless; negotiation carries on.
       }
     };
 
@@ -467,12 +485,19 @@ export const ChatPage: React.FC = () => {
   const handleProposeDate = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!targetUser || dateSaving) return;
+    // datetime-local is the user's wall-clock time; send an absolute ISO instant
+    // so the server (running in UTC) stores the moment that was actually picked.
+    const proposedAt = new Date(dateDraft.proposed_datetime);
+    if (Number.isNaN(proposedAt.getTime())) {
+      setError('Please pick a valid date and time');
+      return;
+    }
     setDateSaving(true);
     setError(null);
     try {
       const result = await dateApi.propose({
         recipient_id: targetUser.id,
-        proposed_datetime: dateDraft.proposed_datetime,
+        proposed_datetime: proposedAt.toISOString(),
         location_text: dateDraft.location_text,
         note: dateDraft.note,
       });
@@ -512,7 +537,10 @@ export const ChatPage: React.FC = () => {
         return [...prev, message];
       });
 
-      if (message.sender_id === targetUser.id) markConversationRead(targetUser.id);
+      if (message.sender_id === targetUser.id) {
+        markConversationRead(targetUser.id);
+        socket.emit('message:read', { peerId: targetUser.id });
+      }
     };
 
     const handleNewMessage = (message: Message) => appendIfActive(message);
@@ -520,14 +548,26 @@ export const ChatPage: React.FC = () => {
       if (data?.success && data.message) appendIfActive(data.message as Message);
     };
 
+    // Read receipt from the peer: tick my messages they have now seen.
+    const handleSeen = (data: { byUserId: number; read_at: string }) => {
+      if (data?.byUserId !== targetUser.id) return;
+      setMessages((prev) =>
+        prev.some((msg) => msg.sender_id === currentUserId && !msg.read_at)
+          ? prev.map((msg) => (msg.sender_id === currentUserId && !msg.read_at ? { ...msg, read_at: data.read_at } : msg))
+          : prev
+      );
+    };
+
     socket.on('message:new', handleNewMessage);
     socket.on('message:sent', handleSentMessage);
+    socket.on('message:seen', handleSeen);
 
     return () => {
       socket.off('message:new', handleNewMessage);
       socket.off('message:sent', handleSentMessage);
+      socket.off('message:seen', handleSeen);
     };
-  }, [markConversationRead, socket, targetUser]);
+  }, [currentUserId, markConversationRead, socket, targetUser]);
 
 
   useEffect(() => {
@@ -584,15 +624,15 @@ export const ChatPage: React.FC = () => {
 
   if (loading && !isConversationView) {
     return (
-      <div className="min-h-screen w-full bg-brand-bg flex items-center justify-center">
+      <div className="flex-1 w-full bg-brand-bg flex items-center justify-center">
         <div className="w-12 h-12 border-4 border-brand-accent/30 border-t-brand-accent rounded-full animate-spin" />
       </div>
     );
   }
 
   return (
-    <div className={`${isConversationView ? 'h-[calc(100vh-68px)] overflow-hidden' : 'min-h-[calc(100vh-68px)]'} w-full bg-brand-bg flex flex-col`}>
-      <main className={`${isConversationView ? 'flex-1 min-h-0 py-4 sm:py-6' : 'flex-1 py-6'} max-w-5xl mx-auto w-full px-4 sm:px-6`}>
+    <div className={`${isConversationView ? 'h-[calc(100dvh-68px)] overflow-hidden' : 'flex-1'} w-full bg-brand-bg flex flex-col`}>
+      <div className={`${isConversationView ? 'flex-1 min-h-0 py-4 sm:py-6' : 'flex-1 py-6'} max-w-5xl mx-auto w-full px-4 sm:px-6`}>
         {error && (
           <ErrorBanner message={error} onDismiss={() => setError(null)} />
         )}
@@ -993,7 +1033,7 @@ export const ChatPage: React.FC = () => {
             )}
           </div>
         )}
-      </main>
+      </div>
     </div>
   );
 };

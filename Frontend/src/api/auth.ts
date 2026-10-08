@@ -6,6 +6,7 @@ import type {
   ResetPasswordPayload,
   User,
 } from '../types/auth';
+import { toApiError } from './http';
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000/api/auth';
@@ -72,11 +73,10 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     }
 
     if (!response.ok) {
-      const errorMessage =
-        data?.message ||
-        (Array.isArray(data?.errors) ? data.errors.join(', ') : null) ||
-        `Request failed with status ${response.status}`;
-      throw new Error(errorMessage);
+      // Public endpoints and the initial /me probe: a 401 here is an expected
+      // answer (bad credentials, no session yet), not an expired session, so it
+      // must not trigger the global sign-out redirect.
+      throw toApiError(response, data, { authenticated: false });
     }
 
     return data;

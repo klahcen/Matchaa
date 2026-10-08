@@ -88,6 +88,11 @@ export const getConversationsList = async (userId: number): Promise<any[]> => {
       LIMIT 1
     ) last_msg ON true
     WHERE other_user.is_verified = TRUE
+      AND NOT EXISTS (
+        SELECT 1 FROM blocks b
+        WHERE (b.blocker_id = $1 AND b.blocked_id = other_user.id)
+           OR (b.blocker_id = other_user.id AND b.blocked_id = $1)
+      )
     ORDER BY other_user.id, last_msg.created_at DESC NULLS LAST
   `;
   const result = await query(sql, [userId]);
@@ -120,12 +125,21 @@ export const getUnreadMessageCountFrom = async (userId: number, senderId: number
   return result.rows[0]?.count ?? 0;
 };
 
+/**
+ * Whether two users may chat, call or plan dates: mutual like AND no block in
+ * either direction. Blocking already deletes both likes, but the block is
+ * checked explicitly so the rule does not depend on that cleanup.
+ */
 export const areUsersConnected = async (userA: number, userB: number): Promise<boolean> => {
   const result = await query<{ exists: boolean }>(
     `SELECT EXISTS(
        SELECT 1 FROM likes ab JOIN likes ba
          ON ba.liker_id = ab.liked_id AND ba.liked_id = ab.liker_id
        WHERE ab.liker_id = $1 AND ab.liked_id = $2
+     ) AND NOT EXISTS(
+       SELECT 1 FROM blocks
+       WHERE (blocker_id = $1 AND blocked_id = $2)
+          OR (blocker_id = $2 AND blocked_id = $1)
      ) AS exists`,
     [userA, userB]
   );

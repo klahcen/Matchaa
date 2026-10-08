@@ -1,3 +1,4 @@
+import { toApiError } from './http';
 import { API_ROOT } from './profile';
 import type { Conversation, Message, ChatUnreadCount } from '../types/chat';
 
@@ -60,11 +61,7 @@ async function request<T>(
     }
 
     if (!response.ok) {
-      const message =
-        body?.message ||
-        (Array.isArray(body?.errors) && body.errors.length > 0 ? body.errors.join(', ') : null) ||
-        `Request failed with status ${response.status}`;
-      throw new Error(message);
+      throw toApiError(response, body);
     }
 
     return (body?.data ?? (null as T)) as T;

@@ -4,9 +4,30 @@ import { authApi } from '../api/auth';
 import { AuthCard } from '../components/common/AuthCard';
 import { ErrorBanner } from '../components/common/ErrorBanner';
 import { FormInput } from '../components/common/FormInput';
+import { FormSelect } from '../components/common/FormSelect';
 import { PrimaryButton } from '../components/common/PrimaryButton';
+import {
+  EMAIL_MAX_LENGTH,
+  NAME_MAX_LENGTH,
+  PASSWORD_MAX_LENGTH,
+  USERNAME_MAX_LENGTH,
+  validateBinaryChoice,
+  validateEmail,
+  validateName,
+  suggestUsername,
+  validatePassword,
+  validateUsername,
+} from '../utils/validation';
 
-const USERNAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
+// Product decision: exactly these two options for both fields.
+const GENDER_CHOICES = [
+  { value: 'male', label: 'Male' },
+  { value: 'female', label: 'Female' },
+];
+const INTERESTED_IN_CHOICES = [
+  { value: 'male', label: 'Men' },
+  { value: 'female', label: 'Women' },
+];
 
 export const RegisterPage: React.FC = () => {
   const [formData, setFormData] = useState({
@@ -16,6 +37,8 @@ export const RegisterPage: React.FC = () => {
     lastName: '',
     password: '',
     confirmPassword: '',
+    gender: '',
+    sexualPreferences: '',
   });
 
   const [loading, setLoading] = useState(false);
@@ -26,38 +49,23 @@ export const RegisterPage: React.FC = () => {
   // Client-side field errors
   const [errors, setErrors] = useState<Record<string, string>>({});
 
+  // Mirrors the backend's registration validators (services/authService.ts).
   const validate = (): boolean => {
     const newErrors: Record<string, string> = {};
+    const set = (field: string, message: string | null) => {
+      if (message) newErrors[field] = message;
+    };
 
-    if (!formData.email.trim()) {
-      newErrors.email = 'Email address is required';
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) {
-      newErrors.email = 'Please enter a valid email address';
-    }
-
-    if (!formData.username.trim()) {
-      newErrors.username = 'Username is required';
-    } else if (formData.username.trim().length < 3) {
-      newErrors.username = 'Username must be at least 3 characters';
-    } else if (formData.username.trim().length > 30) {
-      newErrors.username = 'Username must be 30 characters or fewer';
-    } else if (!USERNAME_PATTERN.test(formData.username.trim())) {
-      newErrors.username = 'Use only letters, numbers, underscores, and hyphens';
-    }
-
-    if (!formData.firstName.trim()) {
-      newErrors.firstName = 'First name is required';
-    }
-
-    if (!formData.lastName.trim()) {
-      newErrors.lastName = 'Last name is required';
-    }
-
-    if (!formData.password) {
-      newErrors.password = 'Password is required';
-    } else if (formData.password.length < 8) {
-      newErrors.password = 'Password must be at least 8 characters';
-    }
+    set('email', validateEmail(formData.email));
+    set('username', validateUsername(formData.username));
+    set('firstName', validateName(formData.firstName, 'First name'));
+    set('lastName', validateName(formData.lastName, 'Last name'));
+    set('gender', validateBinaryChoice(formData.gender, 'Please select your gender'));
+    set(
+      'sexualPreferences',
+      validateBinaryChoice(formData.sexualPreferences, 'Please select who you are interested in')
+    );
+    set('password', validatePassword(formData.password));
 
     if (!formData.confirmPassword) {
       newErrors.confirmPassword = 'Confirm your password';
@@ -69,12 +77,21 @@ export const RegisterPage: React.FC = () => {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
     if (errors[name]) {
       setErrors((prev) => ({ ...prev, [name]: '' }));
     }
+  };
+
+  // Browsers often autofill the saved email into the username field.
+  const usernameSuggestion = errors.username ? suggestUsername(formData.username) : null;
+
+  const applyUsernameSuggestion = () => {
+    if (!usernameSuggestion) return;
+    setFormData((prev) => ({ ...prev, username: usernameSuggestion }));
+    setErrors((prev) => ({ ...prev, username: '' }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -91,6 +108,8 @@ export const RegisterPage: React.FC = () => {
         firstName: formData.firstName.trim(),
         lastName: formData.lastName.trim(),
         password: formData.password,
+        gender: formData.gender as 'male' | 'female',
+        sexual_preferences: formData.sexualPreferences as 'male' | 'female',
       });
 
       setRegisteredEmail(formData.email.trim());
@@ -198,6 +217,8 @@ export const RegisterPage: React.FC = () => {
             label="First Name"
             type="text"
             placeholder="e.g. Alex"
+            maxLength={NAME_MAX_LENGTH}
+            autoComplete="given-name"
             value={formData.firstName}
             onChange={handleChange}
             error={errors.firstName}
@@ -211,6 +232,8 @@ export const RegisterPage: React.FC = () => {
             label="Last Name"
             type="text"
             placeholder="e.g. Rivera"
+            maxLength={NAME_MAX_LENGTH}
+            autoComplete="family-name"
             value={formData.lastName}
             onChange={handleChange}
             error={errors.lastName}
@@ -225,6 +248,7 @@ export const RegisterPage: React.FC = () => {
           label="Username"
           type="text"
           placeholder="e.g. alex_rivera"
+          maxLength={USERNAME_MAX_LENGTH}
           value={formData.username}
           onChange={handleChange}
           error={errors.username}
@@ -233,12 +257,25 @@ export const RegisterPage: React.FC = () => {
           required
         />
 
+        {usernameSuggestion && (
+          <div className="-mt-2 mb-4">
+            <button
+              type="button"
+              onClick={applyUsernameSuggestion}
+              className="text-xs font-semibold text-brand-accent hover:text-brand-mid transition-colors py-1"
+            >
+              Use “{usernameSuggestion}” instead
+            </button>
+          </div>
+        )}
+
         <FormInput
           id="email"
           name="email"
           label="Email Address"
           type="email"
           placeholder="alex@example.com"
+          maxLength={EMAIL_MAX_LENGTH}
           value={formData.email}
           onChange={handleChange}
           error={errors.email}
@@ -247,12 +284,42 @@ export const RegisterPage: React.FC = () => {
           required
         />
 
+        <div className="grid grid-cols-1 sm:grid-cols-2 sm:gap-3">
+          <FormSelect
+            id="gender"
+            name="gender"
+            label="Gender"
+            placeholder="Select..."
+            options={GENDER_CHOICES}
+            value={formData.gender}
+            onChange={handleChange}
+            error={errors.gender}
+            disabled={loading}
+            required
+          />
+
+          <FormSelect
+            id="sexualPreferences"
+            name="sexualPreferences"
+            label="Interested in"
+            placeholder="Select..."
+            options={INTERESTED_IN_CHOICES}
+            value={formData.sexualPreferences}
+            onChange={handleChange}
+            error={errors.sexualPreferences}
+            disabled={loading}
+            required
+          />
+        </div>
+
         <FormInput
           id="password"
           name="password"
           label="Password"
           type="password"
           placeholder="Min. 8 characters"
+          hint="Upper & lower case, digit, symbol"
+          maxLength={PASSWORD_MAX_LENGTH}
           value={formData.password}
           onChange={handleChange}
           error={errors.password}

@@ -23,8 +23,9 @@ import {
  * keeps what is Browsing-specific: the `scored` CTE (relevance formula) and
  * relevance-aware ordering.
  *
- * Shape of the query, in four CTE levels:
+ * Shape of the query, in five CTE levels:
  *   viewer     – the requesting user's own gender / preference / coordinates   (shared)
+ *   grid_users – candidates with coordinates snapped to the ~1 km grid          (shared)
  *   base       – every hard-excluded row removed, geo + tag signals computed  (shared)
  *   candidates – derives same_area from base's columns                        (shared)
  *   scored     – materialises the relevance score as a real column            (browsing-only)

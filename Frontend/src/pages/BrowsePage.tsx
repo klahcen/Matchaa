@@ -1,5 +1,7 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Layers, LayoutGrid } from 'lucide-react';
 import { fetchSuggestions } from '../api/browse';
+import { profileIncompleteMissing } from '../api/http';
 import { ErrorBanner } from '../components/common/ErrorBanner';
 import { BrowseEmptyState } from '../components/browse/BrowseEmptyState';
 import { FilterPanel } from '../components/browse/FilterPanel';
@@ -7,6 +9,7 @@ import { Pagination } from '../components/browse/Pagination';
 import { SortControl } from '../components/browse/SortControl';
 import { SuggestionCard } from '../components/browse/SuggestionCard';
 import { SuggestionSkeleton } from '../components/browse/SuggestionSkeleton';
+import { SwipeDeck } from '../components/browse/SwipeDeck';
 import {
   EMPTY_FILTER_DRAFT,
   LIMIT_OPTIONS,
@@ -36,6 +39,17 @@ const draftToQuery = (draft: FilterDraft): Partial<BrowseQuery> => {
   };
 };
 
+type ViewMode = 'grid' | 'swipe';
+const VIEW_MODE_KEY = 'matcha.browseView';
+
+const readViewMode = (): ViewMode => {
+  try {
+    return window.localStorage.getItem(VIEW_MODE_KEY) === 'swipe' ? 'swipe' : 'grid';
+  } catch {
+    return 'grid'; // storage unavailable (e.g. privacy mode)
+  }
+};
+
 const countActiveFilters = (draft: FilterDraft): number =>
   [
     draft.minAge.trim(),
@@ -59,7 +73,25 @@ export const BrowsePage: React.FC = () => {
   const [data, setData] = useState<SuggestionsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Set when the backend gates browsing (403 PROFILE_INCOMPLETE): what is missing.
+  const [incomplete, setIncomplete] = useState<string[] | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>(readViewMode);
+
+  const changeViewMode = (mode: ViewMode) => {
+    setViewMode(mode);
+    try {
+      window.localStorage.setItem(VIEW_MODE_KEY, mode);
+    } catch {
+      // Not persisting the choice is harmless.
+    }
+  };
+
+  // Filters and sort shared with the swipe deck (it pages on its own).
+  const swipeQuery = useMemo(
+    () => ({ ...draftToQuery(applied), sortBy, sortOrder }),
+    [applied, sortBy, sortOrder]
+  );
 
   // Stable identity for "the inputs that should trigger a fetch".
   const requestKey = JSON.stringify({ applied, sortBy, sortOrder, page, limit });
@@ -83,11 +115,18 @@ export const BrowsePage: React.FC = () => {
         );
         setData(result);
         setError(null);
+        setIncomplete(null);
       } catch (err: any) {
         // A superseded request was cancelled on purpose — ignore it silently.
         if (controller.signal.aborted) return;
-        setError(err?.message || 'Failed to load suggestions');
         setData(null);
+        const missing = profileIncompleteMissing(err);
+        if (missing) {
+          setIncomplete(missing);
+          setError(null);
+        } else {
+          setError(err?.message || 'Failed to load suggestions');
+        }
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }
@@ -149,9 +188,23 @@ export const BrowsePage: React.FC = () => {
     />
   );
 
+  // Profile not complete yet: filters and sorting are pointless, so show only
+  // what is missing and the way to fix it.
+  if (incomplete) {
+    return (
+      <div className="flex-1 w-full bg-brand-bg">
+        <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
+          <h1 className="sr-only">Suggested for you</h1>
+          <BrowseEmptyState variant="profile-incomplete" missing={incomplete} />
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen w-full bg-brand-bg">
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+    // The page sits inside the app layout's <main>, so it uses plain containers.
+    <div className="flex-1 w-full bg-brand-bg">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
         {/* Mobile filter trigger */}
         <div className="lg:hidden mb-4 flex items-center justify-between gap-3">
           <button
@@ -197,81 +250,117 @@ export const BrowsePage: React.FC = () => {
               <div>
                 <h1 className="text-xl sm:text-2xl font-black text-brand-text">Suggested for you</h1>
                 <p className="text-xs sm:text-sm text-brand-muted mt-0.5">
-                  Ranked by proximity, shared interests and fame.
+                  {viewMode === 'swipe'
+                    ? 'Swipe right to like, left to pass.'
+                    : 'Ranked by proximity, shared interests and fame.'}
                   {orientation && !orientation.gender_required && (
                     <> Showing <span className="font-semibold text-brand-text">{orientation.preference}</span> profiles who are also looking for you.</>
                   )}
                 </p>
               </div>
 
-              <SortControl
-                sortBy={sortBy}
-                sortOrder={sortOrder}
-                onSortByChange={handleSortByChange}
-                onSortOrderChange={handleSortOrderChange}
-                disabled={loading && !data}
-              />
-            </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <div
+                  role="group"
+                  aria-label="View"
+                  className="inline-flex p-1 rounded-full bg-brand-surface border border-brand-border"
+                >
+                  {([
+                    { mode: 'grid', label: 'Grid', Icon: LayoutGrid },
+                    { mode: 'swipe', label: 'Swipe', Icon: Layers },
+                  ] as const).map(({ mode, label, Icon }) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => changeViewMode(mode)}
+                      aria-pressed={viewMode === mode}
+                      className={`inline-flex items-center gap-1.5 h-8 px-3.5 rounded-full text-xs font-bold transition-colors ${
+                        viewMode === mode
+                          ? 'bg-brand-accent text-white shadow-sm'
+                          : 'text-brand-muted hover:text-brand-accent'
+                      }`}
+                    >
+                      <Icon className="w-3.5 h-3.5" aria-hidden="true" />
+                      {label}
+                    </button>
+                  ))}
+                </div>
 
-            {/* Rows per page */}
-            <div className="flex items-center justify-between gap-3 mb-4">
-              <p className="text-xs text-brand-muted font-semibold hidden sm:block">
-                {loading
-                  ? 'Loading suggestions…'
-                  : `${suggestions.length} shown · ${data?.pagination.total ?? 0} total`}
-              </p>
-              <div className="flex items-center gap-1.5 ml-auto">
-                <span className="text-xs text-brand-muted font-semibold">Per page</span>
-                {LIMIT_OPTIONS.map((option) => (
-                  <button
-                    key={option}
-                    type="button"
-                    onClick={() => {
-                      setLimit(option);
-                      setPage(1);
-                    }}
-                    className={`min-w-[38px] h-8 px-2 rounded-full text-xs font-bold transition-colors ${
-                      limit === option
-                        ? 'bg-brand-accent text-white'
-                        : 'bg-brand-surface border border-brand-border text-brand-muted hover:text-brand-accent hover:border-brand-accent'
-                    }`}
-                  >
-                    {option}
-                  </button>
-                ))}
+                <SortControl
+                  sortBy={sortBy}
+                  sortOrder={sortOrder}
+                  onSortByChange={handleSortByChange}
+                  onSortOrderChange={handleSortOrderChange}
+                  disabled={loading && !data}
+                />
               </div>
             </div>
 
-            <ErrorBanner message={error} onDismiss={() => setError(null)} />
+            {viewMode === 'swipe' ? (
+              <SwipeDeck query={swipeQuery} hasFilters={hasFilters} onIncomplete={setIncomplete} />
+            ) : (
+              <>
+              {/* Rows per page */}
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <p className="text-xs text-brand-muted font-semibold hidden sm:block">
+                  {loading
+                    ? 'Loading suggestions…'
+                    : `${suggestions.length} shown · ${data?.pagination.total ?? 0} total`}
+                </p>
+                <div className="flex items-center gap-1.5 ml-auto">
+                  <span className="text-xs text-brand-muted font-semibold">Per page</span>
+                  {LIMIT_OPTIONS.map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => {
+                        setLimit(option);
+                        setPage(1);
+                      }}
+                      className={`min-w-[38px] h-8 px-2 rounded-full text-xs font-bold transition-colors ${
+                        limit === option
+                          ? 'bg-brand-accent text-white'
+                          : 'bg-brand-surface border border-brand-border text-brand-muted hover:text-brand-accent hover:border-brand-accent'
+                      }`}
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </div>
+              </div>
 
-            {/* Grid: 1 column on phones, 2 on tablets, 3 on desktop */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-5">
-              {loading ? (
-                <SuggestionSkeleton count={Math.min(limit, 6)} />
-              ) : suggestions.length > 0 ? (
-                suggestions.map((suggestion) => (
-                  <SuggestionCard key={suggestion.id} suggestion={suggestion} />
-                ))
-              ) : (
-                <BrowseEmptyState
-                  variant={emptyVariant}
-                  onClearFilters={handleResetFilters}
-                />
+              <ErrorBanner message={error} onDismiss={() => setError(null)} />
+
+              {/* Grid: 1 column on phones, 2 on tablets, 3 on desktop */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-5">
+                {loading ? (
+                  <SuggestionSkeleton count={Math.min(limit, 6)} />
+                ) : suggestions.length > 0 ? (
+                  suggestions.map((suggestion) => (
+                    <SuggestionCard key={suggestion.id} suggestion={suggestion} />
+                  ))
+                ) : (
+                  <BrowseEmptyState
+                    variant={emptyVariant}
+                    onClearFilters={handleResetFilters}
+                  />
+                )}
+              </div>
+
+              {!loading && data && data.pagination.total > 0 && (
+                <div className="mt-8">
+                  <Pagination
+                    pagination={data.pagination}
+                    onPageChange={handlePageChange}
+                    disabled={loading}
+                  />
+                </div>
               )}
-            </div>
-
-            {!loading && data && data.pagination.total > 0 && (
-              <div className="mt-8">
-                <Pagination
-                  pagination={data.pagination}
-                  onPageChange={handlePageChange}
-                  disabled={loading}
-                />
-              </div>
+              </>
             )}
           </div>
         </div>
-      </main>
+      </div>
 
       {/* Mobile slide-out filter drawer */}
       {drawerOpen && (

@@ -9,6 +9,7 @@ import {
   type FilterDraft,
 } from '../../types/browse';
 import type { Tag } from '../../types/profile';
+import { LOCATION_MAX_LENGTH, validateTagName } from '../../utils/validation';
 
 interface FilterPanelProps {
   draft: FilterDraft;
@@ -20,6 +21,8 @@ interface FilterPanelProps {
 }
 
 const SEARCH_DEBOUNCE_MS = 250;
+/** Backend utils/queryValidation.ts MAX_TAG_FILTERS. */
+const MAX_TAG_FILTERS = 20;
 
 /**
  * Combined filter controls: age range, location text, fame range and a
@@ -102,8 +105,13 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
   const commitTypedTag = () => {
     const normalized = tagQuery.trim().replace(/^#/, '').toLowerCase();
     if (!normalized) return;
-    if (!/^[a-z0-9_-]{2,30}$/.test(normalized)) {
-      setFieldError('Tags must be 2-30 characters: lowercase letters, numbers, _ or -.');
+    const problem = validateTagName(normalized);
+    if (problem) {
+      setFieldError(`${problem}.`);
+      return;
+    }
+    if (draft.tags.length >= MAX_TAG_FILTERS) {
+      setFieldError(`You can filter by up to ${MAX_TAG_FILTERS} tags.`);
       return;
     }
     setFieldError(null);
@@ -113,19 +121,41 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
   const removeTag = (name: string) => patch({ tags: draft.tags.filter((t) => t !== name) });
 
   /**
-   * Client-side range sanity check mirroring the server rule, so an impossible
-   * range is caught before a round-trip.
+   * Client-side check mirroring the server's query validation (whole numbers
+   * within bounds, min <= max, location text rules), so an impossible filter
+   * is caught before a round-trip.
    */
   const validateRanges = (): string | null => {
-    const minAge = draft.minAge.trim() ? Number(draft.minAge) : null;
-    const maxAge = draft.maxAge.trim() ? Number(draft.maxAge) : null;
-    if (minAge !== null && maxAge !== null && minAge > maxAge) {
+    const parse = (raw: string, label: string, min: number, max: number): number | string | null => {
+      const text = raw.trim();
+      if (!text) return null;
+      if (!/^\d+$/.test(text)) return `${label} must be a whole number.`;
+      const value = Number.parseInt(text, 10);
+      if (value < min || value > max) return `${label} must be between ${min} and ${max}.`;
+      return value;
+    };
+
+    const minAge = parse(draft.minAge, 'Minimum age', AGE_MIN, AGE_MAX);
+    const maxAge = parse(draft.maxAge, 'Maximum age', AGE_MIN, AGE_MAX);
+    const minFame = parse(draft.minFame, 'Minimum fame', 0, FAME_MAX);
+    const maxFame = parse(draft.maxFame, 'Maximum fame', 0, FAME_MAX);
+    for (const result of [minAge, maxAge, minFame, maxFame]) {
+      if (typeof result === 'string') return result;
+    }
+
+    if (typeof minAge === 'number' && typeof maxAge === 'number' && minAge > maxAge) {
       return 'Minimum age cannot be greater than maximum age.';
     }
-    const minFame = draft.minFame.trim() ? Number(draft.minFame) : null;
-    const maxFame = draft.maxFame.trim() ? Number(draft.maxFame) : null;
-    if (minFame !== null && maxFame !== null && minFame > maxFame) {
+    if (typeof minFame === 'number' && typeof maxFame === 'number' && minFame > maxFame) {
       return 'Minimum fame cannot be greater than maximum fame.';
+    }
+    // Backend parseLocationFilter: max length, and no LIKE wildcards.
+    const location = draft.location.trim();
+    if (location.length > LOCATION_MAX_LENGTH) {
+      return `Location must not exceed ${LOCATION_MAX_LENGTH} characters.`;
+    }
+    if (/[%_\\]/.test(location)) {
+      return 'Location must not contain the characters % _ or \\.';
     }
     return null;
   };

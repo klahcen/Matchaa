@@ -13,6 +13,8 @@ export interface User {
   verification_token_expires_at: Date | null;
   reset_token: string | null;
   reset_token_expires_at: Date | null;
+  // Bumped on logout and password reset; JWTs carrying an older value are rejected.
+  token_version?: number;
 
   // Placeholder fields for future Matcha features
   gender?: string | null;
@@ -36,6 +38,7 @@ export type SafeUser = Omit<
   | 'verification_token_expires_at'
   | 'reset_token'
   | 'reset_token_expires_at'
+  | 'token_version'
 >;
 
 export interface RegisterDTO {
@@ -44,8 +47,8 @@ export interface RegisterDTO {
   firstName: string;
   lastName: string;
   password: string;
-  gender?: 'male' | 'female';
-  sexualPreferences?: 'male' | 'female';
+  gender: 'male' | 'female';
+  sexualPreferences: 'male' | 'female';
 }
 
 export interface LoginDTO {
@@ -66,6 +69,7 @@ export interface JwtPayload {
   userId: number;
   username: string;
   email: string;
+  tv?: number;
   iat?: number;
   exp?: number;
 }

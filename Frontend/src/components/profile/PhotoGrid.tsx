@@ -325,7 +325,16 @@ export const PhotoGrid: React.FC<PhotoGridProps> = ({
                   type="button"
                   onClick={() => handleDelete(photo)}
                   disabled={busy}
-                  aria-label="Delete photo"
+                  aria-label={
+                    photo.is_profile_picture && photos.length > 1
+                      ? 'Delete profile picture (your oldest remaining photo becomes the new one)'
+                      : 'Delete photo'
+                  }
+                  title={
+                    photo.is_profile_picture && photos.length > 1
+                      ? 'Your oldest remaining photo will become your profile picture'
+                      : undefined
+                  }
                   className="shrink-0 w-8 h-8 flex items-center justify-center rounded-full bg-white/95 hover:bg-brand-error-bg text-brand-error-text transition-colors disabled:opacity-60"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -41,7 +41,7 @@ migrate:
 	done
 
 seed:
-	$(COMPOSE) exec $(BACKEND_SERVICE) npm run seed:fake -- --count $(SEED_COUNT) --wipe
+	$(COMPOSE) exec -T $(BACKEND_SERVICE) npm run seed:fake -- --count $(SEED_COUNT) --wipe
 
 logs:
 	$(COMPOSE) logs -f backend frontend

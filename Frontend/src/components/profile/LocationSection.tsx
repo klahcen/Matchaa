@@ -1,19 +1,25 @@
 import React, { useRef, useState } from 'react';
 import { PrimaryButton } from '../common/PrimaryButton';
+import { LOCATION_MAX_LENGTH, validateLocationText } from '../../utils/validation';
 
 interface LocationSectionProps {
   /** Currently stored readable location, e.g. "Casablanca, Morocco". */
   savedText: string | null;
-  /** True when precise GPS coordinates are stored (i.e. the user consented). */
+  /**
+   * True when the stored location is known to come from a GPS share. Typed
+   * places are geocoded to coordinates too, so coordinates alone do not imply it.
+   */
   hasGps: boolean;
   /** Persists GPS coordinates; the backend reverse-geocodes them into text. */
   onSaveGps: (lat: number, lng: number) => Promise<string>;
-  /** Persists a manually typed approximate location. */
+  /**
+   * Persists a manually typed approximate location. Resolves with the name the
+   * server geocoded it to; rejects with the server's message when the place is
+   * not found (400) or the geocoder is unavailable (503).
+   */
   onSaveManual: (text: string) => Promise<string>;
   onError: (message: string) => void;
 }
-
-const MAX_LOCATION_LENGTH = 255;
 
 /**
  * Location capture with EXPLICIT consent.
@@ -43,6 +49,8 @@ export const LocationSection: React.FC<LocationSectionProps> = ({
   const [savingManual, setSavingManual] = useState(false);
   const [resolvedText, setResolvedText] = useState<string | null>(null);
   const [manualError, setManualError] = useState<string | null>(null);
+  // What a manual entry was resolved to, shown right under the field.
+  const [manualSavedAs, setManualSavedAs] = useState<{ typed: string; resolved: string } | null>(null);
   const [gpsUnsupported, setGpsUnsupported] = useState(false);
 
   const manualInputRef = useRef<HTMLInputElement>(null);
@@ -109,23 +117,24 @@ export const LocationSection: React.FC<LocationSectionProps> = ({
 
   const handleManualSave = async (event: React.FormEvent) => {
     event.preventDefault();
-    const trimmed = manualText.trim();
+    const trimmed = manualText.trim().replace(/\s+/g, ' ');
 
-    if (trimmed.length < 2) {
-      setManualError('Please enter at least 2 characters, e.g. "Casablanca" or "Maârif".');
-      return;
-    }
-    if (trimmed.length > MAX_LOCATION_LENGTH) {
-      setManualError(`Location must not exceed ${MAX_LOCATION_LENGTH} characters.`);
+    const problem = validateLocationText(trimmed);
+    if (problem) {
+      setManualError(problem);
       return;
     }
 
     setManualError(null);
+    setManualSavedAs(null);
     setSavingManual(true);
     try {
       const text = await onSaveManual(trimmed);
       setResolvedText(text);
+      setManualSavedAs({ typed: trimmed, resolved: text });
     } catch (err: any) {
+      // The server's own wording, e.g. "We could not find that place" (400)
+      // or "Location lookup is unavailable, try again later" (503).
       setManualError(err?.message || 'Failed to save your location');
     } finally {
       setSavingManual(false);
@@ -219,15 +228,18 @@ export const LocationSection: React.FC<LocationSectionProps> = ({
             id="location-manual"
             type="text"
             value={manualText}
-            maxLength={MAX_LOCATION_LENGTH}
+            maxLength={LOCATION_MAX_LENGTH}
             onChange={(e) => {
               setManualText(e.target.value);
               if (manualError) setManualError(null);
+              if (manualSavedAs) setManualSavedAs(null);
             }}
             placeholder="e.g. Casablanca, or Maârif"
             autoComplete="off"
             aria-invalid={Boolean(manualError)}
-            aria-describedby={manualError ? 'location-manual-error' : undefined}
+            aria-describedby={
+              manualError ? 'location-manual-error' : manualSavedAs ? 'location-manual-saved' : undefined
+            }
             className={`flex-1 min-h-[46px] px-4 py-2.5 text-sm bg-brand-bg/80 border rounded-xl text-brand-text placeholder-brand-muted/70 outline-none transition-all duration-150 focus:bg-brand-surface focus:ring-3 ${
               manualError
                 ? 'border-brand-error-text/60 focus:border-brand-error-text focus:ring-brand-error-bg'
@@ -258,6 +270,21 @@ export const LocationSection: React.FC<LocationSectionProps> = ({
               />
             </svg>
             <span>{manualError}</span>
+          </p>
+        ) : manualSavedAs ? (
+          <p
+            id="location-manual-saved"
+            role="status"
+            className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 mt-2"
+          >
+            {manualSavedAs.resolved.toLowerCase() === manualSavedAs.typed.toLowerCase() ? (
+              <>Saved. Other members will see <span className="font-black">{manualSavedAs.resolved}</span>.</>
+            ) : (
+              <>
+                Found and saved as <span className="font-black">{manualSavedAs.resolved}</span>. This
+                is what other members will see.
+              </>
+            )}
           </p>
         ) : (
           <p className="text-xs text-brand-muted mt-2">

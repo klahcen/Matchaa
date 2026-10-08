@@ -9,6 +9,7 @@ import {
   getUnreadMessageCount,
   areUsersConnected,
 } from '../db/queries/messageQueries';
+import { emitMessagesSeen } from '../sockets/socketServer';
 
 export class ChatController {
   static async getMessages(
@@ -29,6 +30,7 @@ export class ChatController {
         throw AppError.badRequest('Cannot fetch messages with yourself');
       }
 
+      // Mutual like AND no block in either direction.
       const connected = await areUsersConnected(userId, otherUserId);
       if (!connected) {
         throw AppError.forbidden('You can only view messages with connected users');
@@ -40,7 +42,8 @@ export class ChatController {
 
       const messages = await getConversation(userId, otherUserId, limit, beforeId);
 
-      await markMessagesAsRead(userId, otherUserId);
+      const readCount = await markMessagesAsRead(userId, otherUserId);
+      if (readCount > 0) emitMessagesSeen(userId, otherUserId);
 
       res.status(200).json({
         success: true,

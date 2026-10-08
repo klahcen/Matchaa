@@ -12,16 +12,12 @@ import { computeAge } from './profileQueries';
  *     exposed, matching the rule established by the Profile feature
  */
 
-/**
- * How recently `last_connection` must have been updated for a user to count as
- * "online".
- *
- * NOTE: the users table has no presence heartbeat — `last_connection` is only
- * written at login (see updateLastConnection). So this is really "logged in
- * within the last 5 minutes", not true live presence. Real presence needs a
- * heartbeat or a websocket connection and belongs to the Notifications feature.
+/*
+ * Online status is NOT derived from here: a user is online iff they have at
+ * least one connected socket (see isUserOnline in sockets/socketServer.ts).
+ * `last_connection` is written by the socket server on connect and when the
+ * user's last socket disconnects, so it is the real "last seen" time.
  */
-export const ONLINE_WINDOW_MINUTES = 5;
 
 export interface PublicPhoto {
   id: number;
@@ -201,13 +197,25 @@ export const userExists = async (userId: number): Promise<boolean> => {
 };
 
 /**
- * Derives the online flag from last_connection.
- * Kept in JS rather than SQL so the ONLINE_WINDOW_MINUTES constant lives in one
- * place and is easy to test.
+ * Stamps `last_connection`. Called by the socket server on connect and when a
+ * user's last socket disconnects (which also covers logout). GREATEST keeps a
+ * slow, older write from overwriting a newer one.
  */
-export const isUserOnline = (lastConnection: Date | string | null): boolean => {
-  if (!lastConnection) return false;
-  const last = new Date(lastConnection);
-  if (isNaN(last.getTime())) return false;
-  return Date.now() - last.getTime() <= ONLINE_WINDOW_MINUTES * 60 * 1000;
+export const touchLastConnection = async (userId: number, at: Date = new Date()): Promise<void> => {
+  await query(
+    `UPDATE users SET last_connection = GREATEST(last_connection, $2::timestamptz) WHERE id = $1`,
+    [userId, at]
+  );
+};
+
+/**
+ * A user's last connection time.
+ * @returns undefined when the user does not exist, null when never recorded.
+ */
+export const findLastConnection = async (userId: number): Promise<Date | null | undefined> => {
+  const result = await query<{ last_connection: Date | null }>(
+    `SELECT last_connection FROM users WHERE id = $1`,
+    [userId]
+  );
+  return result.rows.length === 0 ? undefined : result.rows[0].last_connection;
 };

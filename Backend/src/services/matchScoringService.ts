@@ -227,7 +227,10 @@ export interface GeoSignalSql {
  *   level 1 selects distanceKm / textExact / textPartial as real columns;
  *   level 2 derives same_area from those columns via `sameArea(...)`.
  *
- * Alias contract: `v` = the viewer row, `u` = the candidate row.
+ * Alias contract: `v` = the viewer row, `u` = the candidate row. In the
+ * candidate pool `u` is a grid_users row (coordinates snapped to the ~1 km
+ * grid, see candidateQueries.ts), so these signals never encode a candidate's
+ * exact position.
  *
  * @param startIndex 1-based index of the first $n placeholder to use.
  */

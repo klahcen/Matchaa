@@ -1,15 +1,36 @@
 import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { authApi } from '../api/auth';
+import { profileApi } from '../api/profile';
 import { AuthCard } from '../components/common/AuthCard';
 import { ErrorBanner } from '../components/common/ErrorBanner';
 import { FormInput } from '../components/common/FormInput';
 import { PrimaryButton } from '../components/common/PrimaryButton';
 import { useAuth } from '../context/AuthContext';
+import { isProfileComplete } from '../utils/profileCompletion';
+import { validateEmail } from '../utils/validation';
+
+/**
+ * Where to land after signing in: the profile page while the profile is still
+ * incomplete (browsing is gated until then), otherwise browse. One cheap GET;
+ * if it fails for any reason, browse is the safe default (it shows the
+ * completion gate itself when needed).
+ */
+const resolveLandingPath = async (): Promise<string> => {
+  try {
+    const profile = await profileApi.getMe();
+    return profile && !isProfileComplete(profile) ? '/profile' : '/browse';
+  } catch {
+    return '/browse';
+  }
+};
 
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { login } = useAuth();
+  // Set by AuthContext when a request came back 401 (session expired/revoked).
+  const sessionExpired = Boolean((location.state as { sessionExpired?: boolean } | null)?.sessionExpired);
 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -21,6 +42,7 @@ export const LoginPage: React.FC = () => {
   const [resendEmail, setResendEmail] = useState('');
   const [resendLoading, setResendLoading] = useState(false);
   const [resendMessage, setResendMessage] = useState<string | null>(null);
+  const [resendError, setResendError] = useState<string | null>(null);
 
   // Field-level client validation errors
   const [errors, setErrors] = useState<{ username?: string; password?: string }>({});
@@ -48,13 +70,14 @@ export const LoginPage: React.FC = () => {
 
     setLoading(true);
     try {
-      await login({
-        username: username.trim(),
-        password,
+      // Decide the landing page before the app flips to signed-in, otherwise
+      // the public-route guard would already have redirected to /browse.
+      let landingPath = '/browse';
+      await login({ username: username.trim(), password }, async () => {
+        landingPath = await resolveLandingPath();
       });
 
-      // Redirect to browse on successful login
-      navigate('/browse', { replace: true });
+      navigate(landingPath, { replace: true });
     } catch (err: any) {
       setApiError(err.message || 'Failed to sign in. Please check your credentials.');
       if (err.message?.toLowerCase().includes('not verified')) {
@@ -65,16 +88,18 @@ export const LoginPage: React.FC = () => {
     }
   };
 
-  const handleResend = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!resendEmail.trim() || resendLoading) return;
+  const handleResend = async () => {
+    if (resendLoading) return;
+    const problem = validateEmail(resendEmail);
+    setResendError(problem);
+    if (problem) return;
     setResendLoading(true);
     setResendMessage(null);
     try {
       const res = await authApi.resendVerification(resendEmail.trim());
       setResendMessage(res.message || 'Verification link sent!');
     } catch (err: any) {
-      setResendMessage(err.message || 'Failed to resend verification email.');
+      setResendError(err?.message || 'Failed to resend verification email.');
     } finally {
       setResendLoading(false);
     }
@@ -97,6 +122,12 @@ export const LoginPage: React.FC = () => {
       }
     >
       <form onSubmit={handleSubmit} noValidate className="w-full">
+        {sessionExpired && !apiError && (
+          <div role="status" className="w-full bg-amber-50 border border-amber-200 text-amber-900 text-xs sm:text-sm rounded-2xl p-3.5 mb-4 font-medium">
+            Your session has expired. Please sign in again.
+          </div>
+        )}
+
         <ErrorBanner message={apiError} onDismiss={() => setApiError(null)} />
 
         {showResend && (
@@ -108,20 +139,39 @@ export const LoginPage: React.FC = () => {
               <input
                 type="email"
                 value={resendEmail}
-                onChange={(e) => setResendEmail(e.target.value)}
+                onChange={(e) => {
+                  setResendEmail(e.target.value);
+                  if (resendError) setResendError(null);
+                }}
+                onKeyDown={(e) => {
+                  // Enter here resends the link instead of submitting the login form.
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void handleResend();
+                  }
+                }}
                 placeholder="Enter your email"
-                className="flex-1 text-xs px-3 py-2 bg-brand-surface border border-brand-border rounded-xl focus:outline-none focus:border-brand-accent"
+                aria-label="Email for a new activation link"
+                aria-invalid={resendError ? true : undefined}
+                autoComplete="email"
+                maxLength={255}
+                className={`flex-1 min-w-0 text-xs px-3 py-2 bg-brand-surface border rounded-xl focus:outline-none ${
+                  resendError ? 'border-brand-error-text/60 focus:border-brand-error-text' : 'border-brand-border focus:border-brand-accent'
+                }`}
               />
               <button
                 type="button"
-                onClick={handleResend}
+                onClick={() => void handleResend()}
                 disabled={resendLoading || !resendEmail.trim()}
                 className="text-xs font-semibold px-3.5 py-2 bg-brand-accent text-white rounded-xl hover:bg-brand-mid transition-colors disabled:opacity-50 shrink-0"
               >
                 {resendLoading ? 'Sending...' : 'Resend'}
               </button>
             </div>
-            {resendMessage && (
+            {resendError && (
+              <p className="text-xs mt-2 font-medium text-brand-error-text">{resendError}</p>
+            )}
+            {resendMessage && !resendError && (
               <p className="text-xs mt-2 font-medium text-emerald-700">
                 {resendMessage}
               </p>

@@ -62,6 +62,15 @@ export const getDateProposalsBetween = async (userA: number, userB: number): Pro
   return result.rows;
 };
 
+/** Proposer of a pending proposal addressed to recipientId, or null if there is none. */
+export const findPendingDateProposer = async (dateId: number, recipientId: number): Promise<number | null> => {
+  const result = await query<{ proposer_id: number }>(
+    `SELECT proposer_id FROM dates WHERE id = $1 AND recipient_id = $2 AND status = 'pending'`,
+    [dateId, recipientId]
+  );
+  return result.rows[0]?.proposer_id ?? null;
+};
+
 export const respondToDateProposal = async (
   dateId: number,
   recipientId: number,

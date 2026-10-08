@@ -3,18 +3,11 @@ import { Link } from 'react-router-dom';
 import { resolveMediaUrl } from '../../api/profile';
 import { FameBadge } from '../profile/FameBadge';
 import type { Suggestion } from '../../types/browse';
+import { formatDistance } from '../../utils/format';
 
 interface SuggestionCardProps {
   suggestion: Suggestion;
 }
-
-/** Formats a distance for display, hiding it when coordinates are unknown. */
-const formatDistance = (km: number | null): string | null => {
-  if (km === null || !Number.isFinite(km)) return null;
-  if (km < 1) return `${Math.round(km * 1000)} m away`;
-  if (km < 10) return `${km.toFixed(1)} km away`;
-  return `${Math.round(km)} km away`;
-};
 
 /**
  * One suggested profile in the browse grid.

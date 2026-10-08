@@ -23,10 +23,18 @@ export const SEXUAL_PREFERENCE_OPTIONS = ['male', 'female'] as const;
 export type Gender = (typeof GENDER_OPTIONS)[number];
 export type SexualPreference = (typeof SEXUAL_PREFERENCE_OPTIONS)[number];
 
+/** Items the backend can list as missing before browsing is unlocked. */
+export type ProfileRequirement = 'biography' | 'tags' | 'profile_picture' | 'location';
+
 /** GET /api/profile/me response payload. Never contains password_hash or tokens. */
 export interface Profile {
   id: number;
   email: string;
+  /**
+   * New address awaiting confirmation through the emailed link; `email` stays
+   * the active one until then. Optional: older backends do not send it.
+   */
+  pending_email?: string | null;
   username: string;
   first_name: string;
   last_name: string;
@@ -48,6 +56,9 @@ export interface Profile {
   photo_count: number;
   max_photos: number;
   has_profile_picture: boolean;
+  /** Completion gate for browse/search/like. Optional: older backends omit it. */
+  profile_complete?: boolean;
+  profile_missing?: string[];
 }
 
 /** PUT /api/profile/me request body (all fields optional). */
@@ -61,6 +72,12 @@ export interface ProfileUpdatePayload {
   birthdate?: string | null;
 }
 
+/** PUT /api/profile/me result: the updated profile plus the server's message. */
+export interface ProfileUpdateResult {
+  profile: Profile;
+  message?: string;
+}
+
 /**
  * PUT /api/profile/me/location — exactly one of the two shapes:
  * GPS coords (consented) or manual text fallback.
@@ -72,8 +89,13 @@ export type LocationPayload =
 export interface LocationResult {
   latitude: number | null;
   longitude: number | null;
+  /** The resolved (geocoded) place name, which is what other members see. */
   location_text: string;
+  /** How the location was captured. Optional for older backends. */
+  location_source?: 'gps' | 'manual';
   fame_rating: number;
+  /** Server message, e.g. "Location set to Casablanca, Morocco". */
+  message?: string;
 }
 
 /**
@@ -97,6 +119,12 @@ export interface PhotoDeleteResult {
   deleted_id: number;
   was_profile_picture: boolean;
   has_profile_picture: boolean;
+  /**
+   * When the deleted photo was the profile picture, the backend promotes the
+   * oldest remaining photo automatically; this is its id (null if none left).
+   * Optional for older backends.
+   */
+  promoted_photo_id?: number | null;
   photo_count: number;
   fame_rating: number;
 }

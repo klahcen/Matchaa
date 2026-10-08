@@ -1,11 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { MapPin, Minus, Navigation, Plus, RefreshCw } from 'lucide-react';
+import { profileIncompleteMissing } from '../api/http';
 import { fetchSearchResults } from '../api/search';
 import { resolveMediaUrl } from '../api/profile';
+import { BrowseEmptyState } from '../components/browse/BrowseEmptyState';
 import { ErrorBanner } from '../components/common/ErrorBanner';
 import { FameBadge } from '../components/profile/FameBadge';
 import type { Suggestion } from '../types/browse';
+import { formatDistance } from '../utils/format';
 
 interface MapPoint extends Suggestion {
   map_latitude: number;
@@ -82,13 +85,6 @@ const isMappable = (profile: Suggestion): profile is MapPoint =>
   Number.isFinite(profile.map_latitude) &&
   typeof profile.map_longitude === 'number' &&
   Number.isFinite(profile.map_longitude);
-
-const formatDistance = (km: number | null): string | null => {
-  if (km === null || !Number.isFinite(km)) return null;
-  if (km < 1) return `${Math.round(km * 1000)} m away`;
-  if (km < 10) return `${km.toFixed(1)} km away`;
-  return `${Math.round(km)} km away`;
-};
 
 const initialsFor = (profile: Suggestion): string =>
   `${profile.first_name?.[0] ?? ''}${profile.last_name?.[0] ?? ''}`.toUpperCase() || '?';
@@ -248,6 +244,8 @@ export const MapPage: React.FC = () => {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Set when the backend gates search (403 PROFILE_INCOMPLETE): what is missing.
+  const [incomplete, setIncomplete] = useState<string[] | null>(null);
   const [mapSize, setMapSize] = useState<MapSize>({ width: 0, height: 0 });
   const [mapView, setMapView] = useState<MapView>(DEFAULT_MAP_VIEW);
   const mapRef = useRef<HTMLElement | null>(null);
@@ -260,10 +258,13 @@ export const MapPage: React.FC = () => {
     try {
       const data = await fetchSearchResults({ sortBy: 'location', sortOrder: 'asc', limit: 48 });
       setProfiles(data.results);
+      setIncomplete(null);
       setSelectedId((current) => (data.results.some((profile) => profile.id === current) ? current : null));
     } catch (err: any) {
-      setError(err?.message || 'Failed to load map users');
       setProfiles([]);
+      const missing = profileIncompleteMissing(err);
+      if (missing) setIncomplete(missing);
+      else setError(err?.message || 'Failed to load map users');
     } finally {
       setLoading(false);
     }
@@ -379,13 +380,28 @@ export const MapPage: React.FC = () => {
     }
   };
 
-  const handleWheel = (event: React.WheelEvent<HTMLElement>) => {
-    if (!renderViewport) return;
-    event.preventDefault();
-    const rect = event.currentTarget.getBoundingClientRect();
-    const nextZoom = renderViewport.zoom + (event.deltaY < 0 ? 1 : -1);
-    zoomAtPoint(nextZoom, event.clientX - rect.left, event.clientY - rect.top);
-  };
+  // Wheel zoom. React registers wheel listeners as passive, so preventDefault()
+  // there is ignored (console warning, and the page scrolls while zooming).
+  // A native non-passive listener on the map element is used instead; the ref
+  // always points at the latest handler so the listener is attached only once.
+  const wheelHandlerRef = useRef<(event: WheelEvent) => void>(() => {});
+  useEffect(() => {
+    wheelHandlerRef.current = (event: WheelEvent) => {
+      if (!renderViewport || !mapRef.current) return;
+      event.preventDefault();
+      const rect = mapRef.current.getBoundingClientRect();
+      const nextZoom = renderViewport.zoom + (event.deltaY < 0 ? 1 : -1);
+      zoomAtPoint(nextZoom, event.clientX - rect.left, event.clientY - rect.top);
+    };
+  }, [renderViewport, zoomAtPoint]);
+
+  useEffect(() => {
+    const element = mapRef.current;
+    if (!element) return undefined;
+    const onWheel = (event: WheelEvent) => wheelHandlerRef.current(event);
+    element.addEventListener('wheel', onWheel, { passive: false });
+    return () => element.removeEventListener('wheel', onWheel);
+  }, [incomplete]);
 
   const markerStyle = (point: PositionedMapPoint, active: boolean): React.CSSProperties => ({
     left: `${point.screenX}px`,
@@ -423,9 +439,21 @@ export const MapPage: React.FC = () => {
     });
   };
 
+  if (incomplete) {
+    return (
+      <div className="flex-1 w-full bg-brand-bg">
+        <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
+          <h1 className="sr-only">Map nearby members</h1>
+          <BrowseEmptyState variant="profile-incomplete" missing={incomplete} />
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen w-full bg-brand-bg">
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+    // The page sits inside the app layout's <main>, so it uses plain containers.
+    <div className="flex-1 w-full bg-brand-bg">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
           <div>
             <h1 className="text-xl sm:text-2xl font-black text-brand-text">Map nearby members</h1>
@@ -451,17 +479,16 @@ export const MapPage: React.FC = () => {
               <p className="text-xs font-black uppercase tracking-wider text-brand-text flex items-center gap-2">
                 <Navigation className="w-4 h-4 text-brand-accent" /> Matcha Map
               </p>
-              <p className="text-xs text-brand-muted">{points.length} users with GPS area · zoom {mapView.zoom}</p>
+              <p className="text-xs text-brand-muted">{points.length} {points.length === 1 ? 'member' : 'members'} on the map · zoom {mapView.zoom}</p>
             </div>
 
             <section
               ref={mapRef}
-              className="relative h-[560px] rounded-3xl overflow-hidden border border-brand-border bg-slate-100 shadow-md touch-none cursor-grab active:cursor-grabbing select-none"
+              className="relative h-[420px] sm:h-[560px] rounded-3xl overflow-hidden border border-brand-border bg-slate-100 shadow-md touch-none cursor-grab active:cursor-grabbing select-none"
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerEnd}
               onPointerCancel={handlePointerEnd}
-              onWheel={handleWheel}
               onDoubleClick={(event) => {
                 const rect = event.currentTarget.getBoundingClientRect();
                 zoomAtPoint(mapView.zoom + 1, event.clientX - rect.left, event.clientY - rect.top);
@@ -533,9 +560,9 @@ export const MapPage: React.FC = () => {
                 <div className="absolute inset-0 z-10 flex items-center justify-center p-6 text-center">
                   <div className="bg-white/90 backdrop-blur rounded-3xl border border-white/70 shadow-md p-6 max-w-md">
                     <MapPin className="w-10 h-10 mx-auto text-brand-muted mb-3" />
-                    <h2 className="font-black text-brand-text">No mappable users yet</h2>
+                    <h2 className="font-black text-brand-text">No members to map yet</h2>
                     <p className="text-sm text-brand-muted mt-1">
-                      Users need GPS-based location enabled to appear on the map. Research and Browse still show text-location users.
+                      Members appear here once they set a location, shared by GPS or typed in by hand. Try Refresh later, or use Browse and Research in the meantime.
                     </p>
                   </div>
                 </div>
@@ -634,7 +661,7 @@ export const MapPage: React.FC = () => {
             )}
           </aside>
         </div>
-      </main>
+      </div>
     </div>
   );
 };

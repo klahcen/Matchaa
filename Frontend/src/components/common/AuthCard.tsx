@@ -14,7 +14,9 @@ export const AuthCard: React.FC<AuthCardProps> = ({
   footer,
 }) => {
   return (
-    <div className="min-h-screen w-full flex items-center justify-center p-4 sm:p-6 bg-gradient-to-br from-brand-start via-brand-mid to-brand-end">
+    // The gradient background, header and footer come from PublicLayout, which
+    // renders this card inside its <main>.
+    <div className="w-full flex items-center justify-center py-4 sm:py-8">
       {/* Centered responsive card with Tinder-styled soft shadow and rounded corners */}
       <div className="w-full max-w-md bg-brand-surface rounded-3xl shadow-2xl p-6 sm:p-9 flex flex-col transition-all duration-300">
         {/* Brand Header */}

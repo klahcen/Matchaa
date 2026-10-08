@@ -6,8 +6,10 @@ import type {
   Profile,
   ProfileSummary,
   ProfileUpdatePayload,
+  ProfileUpdateResult,
   Tag,
 } from '../types/profile';
+import { toApiError } from './http';
 
 /**
  * Profile API client.
@@ -54,6 +56,9 @@ interface ApiEnvelope<T> {
  */
 const REQUEST_TIMEOUT_MS = 10_000;
 
+/** Location saves wait on an external geocoder, so they get more headroom. */
+const LOCATION_TIMEOUT_MS = 20_000;
+
 /**
  * Shared fetch wrapper. Sends the httpOnly auth cookie, parses the standard
  * { success, message, data } envelope, and converts failures into Errors with
@@ -61,14 +66,21 @@ const REQUEST_TIMEOUT_MS = 10_000;
  *
  * `json` is false for multipart uploads, where the browser must set the
  * Content-Type header itself so the multipart boundary is correct.
- * Every call is bounded by REQUEST_TIMEOUT_MS; a caller-supplied `signal` is
- * honoured too, and whichever fires first wins.
+ * Every call is bounded by REQUEST_TIMEOUT_MS (or `timeoutMs` when a call is
+ * known to be slower); a caller-supplied `signal` is honoured too, and
+ * whichever fires first wins.
  */
 async function request<T>(
   endpoint: string,
-  options: RequestInit & { json?: boolean } = {}
+  options: RequestInit & { json?: boolean; timeoutMs?: number } = {}
 ): Promise<ApiEnvelope<T>> {
-  const { json = true, headers, signal: callerSignal, ...rest } = options;
+  const {
+    json = true,
+    headers,
+    signal: callerSignal,
+    timeoutMs = REQUEST_TIMEOUT_MS,
+    ...rest
+  } = options;
 
   const controller = new AbortController();
   let timedOut = false;
@@ -76,7 +88,7 @@ async function request<T>(
   const timer = setTimeout(() => {
     timedOut = true;
     controller.abort();
-  }, REQUEST_TIMEOUT_MS);
+  }, timeoutMs);
 
   const forwardCallerAbort = () => controller.abort();
   if (callerSignal) {
@@ -105,7 +117,7 @@ async function request<T>(
       if (callerSignal?.aborted && !timedOut) throw error;
       if (timedOut) {
         throw new Error(
-          `Matcha server did not respond within ${REQUEST_TIMEOUT_MS / 1000} seconds. Please check that the backend is running and try again.`
+          `Matcha server did not respond within ${timeoutMs / 1000} seconds. Please check that the backend is running and try again.`
         );
       }
       throw new Error(
@@ -121,11 +133,7 @@ async function request<T>(
     }
 
     if (!response.ok) {
-      const message =
-        body?.message ||
-        (Array.isArray(body?.errors) && body.errors.length > 0 ? body.errors.join(', ') : null) ||
-        `Request failed with status ${response.status}`;
-      throw new Error(message);
+      throw toApiError(response, body);
     }
 
     return (body ?? { success: true }) as ApiEnvelope<T>;
@@ -142,29 +150,36 @@ export const profileApi = {
   /** GET /api/profile/me — full profile incl. tags and photos. */
   getMe: async (): Promise<Profile> => unwrap(await request<Profile>('/profile/me'), null as any),
 
-  /** PUT /api/profile/me — basic info, gender, preference, biography, email. */
-  updateMe: async (payload: ProfileUpdatePayload): Promise<Profile> =>
-    unwrap(
-      await request<Profile>('/profile/me', {
-        method: 'PUT',
-        body: JSON.stringify(payload),
-      }),
-      null as any
-    ),
+  /**
+   * PUT /api/profile/me — basic info, gender, preference, biography, email.
+   * Also returns the server's message: an email change is not applied
+   * immediately (it is stored as pending_email until the emailed link is
+   * confirmed), and the message is what tells the user so.
+   */
+  updateMe: async (payload: ProfileUpdatePayload): Promise<ProfileUpdateResult> => {
+    const envelope = await request<Profile>('/profile/me', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    return { profile: unwrap(envelope, null as any), message: envelope.message };
+  },
 
   /**
    * PUT /api/profile/me/location
    * Pass { lat, lng } after explicit GPS consent, or { locationText } for the
-   * manual fallback. The backend reverse-geocodes GPS coords via Nominatim.
+   * manual fallback. The backend geocodes both through Nominatim (400 with a
+   * message when a typed place is not found, 503 when the geocoder is down),
+   * so this call gets a longer timeout than the default.
    */
-  updateLocation: async (payload: LocationPayload): Promise<LocationResult> =>
-    unwrap(
-      await request<LocationResult>('/profile/me/location', {
-        method: 'PUT',
-        body: JSON.stringify(payload),
-      }),
-      null as any
-    ),
+  updateLocation: async (payload: LocationPayload): Promise<LocationResult> => {
+    const envelope = await request<LocationResult>('/profile/me/location', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+      timeoutMs: LOCATION_TIMEOUT_MS,
+    });
+    const data = unwrap(envelope, null as any);
+    return data ? { ...data, message: envelope.message } : data;
+  },
 
   /** GET /api/profile/me/tags */
   getTags: async (): Promise<Tag[]> =>
@@ -206,12 +221,18 @@ export const profileApi = {
     );
   },
 
-  /** DELETE /api/profile/me/photos/:photoId */
-  deletePhoto: async (photoId: number): Promise<PhotoDeleteResult> =>
-    unwrap(
-      await request<PhotoDeleteResult>(`/profile/me/photos/${photoId}`, { method: 'DELETE' }),
-      null as any
-    ),
+  /**
+   * DELETE /api/profile/me/photos/:photoId — deleting the profile picture
+   * promotes the oldest remaining photo (promoted_photo_id). The server's
+   * message, which explains that, is returned alongside the data.
+   */
+  deletePhoto: async (photoId: number): Promise<PhotoDeleteResult & { message?: string }> => {
+    const envelope = await request<PhotoDeleteResult>(`/profile/me/photos/${photoId}`, {
+      method: 'DELETE',
+    });
+    const data = unwrap(envelope, null as any);
+    return data ? { ...data, message: envelope.message } : data;
+  },
 
   /** PUT /api/profile/me/photos/:photoId/set-profile-picture */
   setProfilePicture: async (photoId: number): Promise<Photo> =>

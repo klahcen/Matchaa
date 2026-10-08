@@ -48,7 +48,6 @@ export interface PublicProfileResponse {
   tags: PublicTag[];
   is_online: boolean;
   last_seen: string | null;
-  online_window_minutes: number;
   relationship: RelationshipState;
   viewer: ViewerState;
   is_self: boolean;

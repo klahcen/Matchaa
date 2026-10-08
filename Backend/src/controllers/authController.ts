@@ -8,6 +8,7 @@ import {
   findUserByResetToken,
   findUserByUsername,
   findUserByVerificationToken,
+  incrementTokenVersion,
   setResetPasswordToken,
   updateLastConnection,
   updateUserPassword,
@@ -211,11 +212,12 @@ export class AuthController {
       // Update last connection timestamp
       await updateLastConnection(user.id);
 
-      // Generate JWT auth token
+      // Generate JWT auth token, stamped with the current token_version so logout can revoke it
       const token = generateAuthToken({
         userId: user.id,
         username: user.username,
         email: user.email,
+        tv: user.token_version ?? 0,
       });
 
       // Set httpOnly cookie
@@ -276,8 +278,8 @@ export class AuthController {
   static async resetPassword(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const dto = validateResetPasswordDTO({
-        token: req.params.token || req.body.token,
-        password: req.body.password ?? req.body.newPassword,
+        token: req.params.token || req.body?.token,
+        password: req.body?.password ?? req.body?.newPassword,
       });
 
       const user = await findUserByResetToken(dto.token);
@@ -289,6 +291,7 @@ export class AuthController {
         throw AppError.badRequest('Password reset token has expired. Please request a new one.');
       }
 
+      // Also bumps token_version, logging out every existing session of this account
       const passwordHash = await hashPassword(dto.password);
       await updateUserPassword(user.id, passwordHash);
 
@@ -303,19 +306,30 @@ export class AuthController {
 
   /**
    * POST /api/auth/logout
-   * Clears the authentication httpOnly cookie.
+   * Clears the authentication httpOnly cookie and revokes the JWT server-side.
+   * req.user is set by optionalAuth only when the presented token is still valid.
    */
-  static async logout(_req: Request, res: Response): Promise<void> {
-    res.clearCookie(COOKIE_NAME, {
-      httpOnly: true,
-      secure: env.NODE_ENV === 'production',
-      sameSite: 'lax',
-    });
+  static async logout(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      res.clearCookie(COOKIE_NAME, {
+        httpOnly: true,
+        secure: env.NODE_ENV === 'production',
+        sameSite: 'lax',
+      });
 
-    res.status(200).json({
-      success: true,
-      message: 'Logged out successfully',
-    });
+      // Bumping token_version invalidates this token (and any copy of it, e.g. via the
+      // Bearer header) right away instead of leaving it usable until it expires.
+      if (req.user) {
+        await incrementTokenVersion(req.user.id);
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'Logged out successfully',
+      });
+    } catch (error) {
+      next(error);
+    }
   }
 
   /**

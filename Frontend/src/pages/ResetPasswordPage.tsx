@@ -5,6 +5,7 @@ import { AuthCard } from '../components/common/AuthCard';
 import { ErrorBanner } from '../components/common/ErrorBanner';
 import { FormInput } from '../components/common/FormInput';
 import { PrimaryButton } from '../components/common/PrimaryButton';
+import { PASSWORD_MAX_LENGTH, validatePassword } from '../utils/validation';
 
 export const ResetPasswordPage: React.FC = () => {
   const { token: paramToken } = useParams<{ token: string }>();
@@ -22,11 +23,9 @@ export const ResetPasswordPage: React.FC = () => {
   const validate = (): boolean => {
     const newErrors: { password?: string; confirmPassword?: string } = {};
 
-    if (!password) {
-      newErrors.password = 'New password is required';
-    } else if (password.length < 8) {
-      newErrors.password = 'Password must be at least 8 characters long';
-    }
+    // Same strength rules as the backend's validatePassword.
+    const passwordError = password ? validatePassword(password) : 'New password is required';
+    if (passwordError) newErrors.password = passwordError;
 
     if (!confirmPassword) {
       newErrors.confirmPassword = 'Confirm your new password';
@@ -114,6 +113,8 @@ export const ResetPasswordPage: React.FC = () => {
           label="New Password"
           type="password"
           placeholder="Min. 8 characters"
+          hint="Upper & lower case, digit, symbol"
+          maxLength={PASSWORD_MAX_LENGTH}
           value={password}
           onChange={(e) => {
             setPassword(e.target.value);

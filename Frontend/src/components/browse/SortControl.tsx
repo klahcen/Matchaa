@@ -23,6 +23,9 @@ const ORDER_LABELS: Record<SortField, { asc: string; desc: string }> = {
  * Changing the field resets the direction to that field's sensible default
  * (fame/commonTags descending, age and distance ascending), matching the
  * backend's DEFAULT_SORT_ORDER so the two never disagree.
+ *
+ * Relevance is always ranked best match first server-side, so the toggle is
+ * hidden for it rather than offering a control that does nothing.
  */
 export const SortControl: React.FC<SortControlProps> = ({
   sortBy,
@@ -67,24 +70,26 @@ export const SortControl: React.FC<SortControlProps> = ({
         </svg>
       </div>
 
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => onSortOrderChange(sortOrder === 'asc' ? 'desc' : 'asc')}
-        title={ORDER_LABELS[sortBy][sortOrder]}
-        aria-label={`Sort direction: ${ORDER_LABELS[sortBy][sortOrder]}. Click to reverse.`}
-        className="inline-flex items-center justify-center gap-2 min-h-[44px] px-4 py-2.5 rounded-full bg-brand-surface border border-brand-border text-sm font-semibold text-brand-text hover:border-brand-accent hover:text-brand-accent transition-colors disabled:opacity-50 disabled:pointer-events-none"
-      >
-        <svg
-          className={`w-4 h-4 transition-transform duration-200 ${sortOrder === 'asc' ? '' : 'rotate-180'}`}
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
+      {sortBy !== 'relevance' && (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onSortOrderChange(sortOrder === 'asc' ? 'desc' : 'asc')}
+          title={ORDER_LABELS[sortBy][sortOrder]}
+          aria-label={`Sort direction: ${ORDER_LABELS[sortBy][sortOrder]}. Click to reverse.`}
+          className="inline-flex items-center justify-center gap-2 min-h-[44px] px-4 py-2.5 rounded-full bg-brand-surface border border-brand-border text-sm font-semibold text-brand-text hover:border-brand-accent hover:text-brand-accent transition-colors disabled:opacity-50 disabled:pointer-events-none"
         >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 15l7-7 7 7" />
-        </svg>
-        <span className="whitespace-nowrap">{ORDER_LABELS[sortBy][sortOrder]}</span>
-      </button>
+          <svg
+            className={`w-4 h-4 transition-transform duration-200 ${sortOrder === 'asc' ? '' : 'rotate-180'}`}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 15l7-7 7 7" />
+          </svg>
+          <span className="whitespace-nowrap">{ORDER_LABELS[sortBy][sortOrder]}</span>
+        </button>
+      )}
     </div>
   );
 };

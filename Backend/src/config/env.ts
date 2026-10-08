@@ -1,9 +1,45 @@
 import dotenv from 'dotenv';
 import path from 'path';
 
-// Load .env file from project root or backend directory
+// Load Backend/.env, the current directory's .env, then the repository root .env (the one
+// Docker Compose reads). dotenv never overrides a variable that is already set, so earlier wins.
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 dotenv.config();
+dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+
+// Secrets have no fallback: they must come from a local, untracked .env file.
+const REQUIRED_VARS = ['JWT_SECRET', 'DB_PASSWORD'] as const;
+const missingVars = REQUIRED_VARS.filter((name) => !process.env[name]?.trim());
+if (missingVars.length > 0) {
+  console.error(
+    `[Env] Missing required environment variable(s): ${missingVars.join(', ')}. ` +
+    'Set them in your local .env file (see README) and restart the server.'
+  );
+  process.exit(1);
+}
+
+const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
+
+/**
+ * Parses CORS_ORIGIN (comma-separated) into an explicit allow-list.
+ * '*' is rejected: combined with credentials it would let any site use the session cookie.
+ */
+const parseCorsOrigins = (raw: string | undefined): string[] => {
+  const entries = (raw || CLIENT_URL)
+    .split(',')
+    .map((origin) => origin.trim().replace(/\/+$/, ''))
+    .filter(Boolean);
+
+  const origins = entries.filter((origin) => origin !== '*');
+  if (origins.length !== entries.length) {
+    console.warn(`[Env] CORS_ORIGIN='*' is not allowed with credentials and was ignored.`);
+  }
+  if (origins.length === 0) {
+    console.warn(`[Env] No usable CORS_ORIGIN configured; falling back to CLIENT_URL (${CLIENT_URL}).`);
+    return [CLIENT_URL];
+  }
+  return origins;
+};
 
 export const env = {
   PORT: Number(process.env.PORT || process.env.APP_PORT || 3000),
@@ -15,11 +51,11 @@ export const env = {
   DB_HOST: process.env.DB_HOST || 'localhost',
   DB_PORT: Number(process.env.DB_PORT || 5432),
   DB_USER: process.env.DB_USER || 'postgres',
-  DB_PASSWORD: process.env.DB_PASSWORD || '132456789',
+  DB_PASSWORD: process.env.DB_PASSWORD as string,
   DB_NAME: process.env.DB_NAME || 'matcha_db',
 
   // JWT settings
-  JWT_SECRET: process.env.JWT_SECRET || 'super_secret_matcha_jwt_key_2026_change_in_production',
+  JWT_SECRET: process.env.JWT_SECRET as string,
   JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || '24h',
 
   // Resend API settings
@@ -32,11 +68,11 @@ export const env = {
 
   // Application public URL for email links
   APP_URL: process.env.APP_URL || 'http://localhost:3000',
-  CLIENT_URL: process.env.CLIENT_URL || 'http://localhost:5173',
+  CLIENT_URL,
 
-  // CORS allowed origins (comma-separated). Use '*' for all origins in development,
-  // or specify exact origins like 'https://app.example.com,https://www.example.com' in production.
-  CORS_ORIGIN: process.env.CORS_ORIGIN || '*',
+  // CORS allowed origins, from CORS_ORIGIN (comma-separated, defaults to CLIENT_URL).
+  // Shared by Express and Socket.IO so both accept exactly the same origins.
+  CORS_ORIGINS: parseCorsOrigins(process.env.CORS_ORIGIN),
 
   // Paths
   DATA_DIR: path.resolve(__dirname, '../../data'),

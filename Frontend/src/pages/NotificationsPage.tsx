@@ -77,8 +77,8 @@ export const NotificationsPage: React.FC = () => {
       try {
         await notificationApi.markAsRead(notification.id);
         markNotificationRead(notification.id);
-      } catch (err) {
-        console.error('Failed to mark notification as read:', err);
+      } catch {
+        // Still open the related page; the item simply stays unread.
       }
     }
 
@@ -100,8 +100,8 @@ export const NotificationsPage: React.FC = () => {
   const unreadCount = notifications.filter((notification) => !notification.is_read).length;
 
   return (
-    <div className="min-h-screen w-full bg-brand-bg">
-      <main className="max-w-3xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+    <div className="flex-1 w-full bg-brand-bg">
+      <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
         <div className="bg-brand-surface rounded-3xl shadow-md border border-brand-border overflow-hidden">
           <div className="px-5 sm:px-7 py-5 border-b border-brand-border flex items-center justify-between gap-3">
             <div>
@@ -168,7 +168,7 @@ export const NotificationsPage: React.FC = () => {
             )}
           </div>
         </div>
-      </main>
+      </div>
     </div>
   );
 };

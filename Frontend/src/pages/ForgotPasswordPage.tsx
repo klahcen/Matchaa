@@ -5,6 +5,7 @@ import { AuthCard } from '../components/common/AuthCard';
 import { ErrorBanner } from '../components/common/ErrorBanner';
 import { FormInput } from '../components/common/FormInput';
 import { PrimaryButton } from '../components/common/PrimaryButton';
+import { EMAIL_MAX_LENGTH, validateEmail } from '../utils/validation';
 
 export const ForgotPasswordPage: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -14,16 +15,9 @@ export const ForgotPasswordPage: React.FC = () => {
   const [fieldError, setFieldError] = useState<string | undefined>(undefined);
 
   const validate = (): boolean => {
-    if (!email.trim()) {
-      setFieldError('Email address is required');
-      return false;
-    }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      setFieldError('Please enter a valid email address');
-      return false;
-    }
-    setFieldError(undefined);
-    return true;
+    const problem = validateEmail(email);
+    setFieldError(problem ?? undefined);
+    return !problem;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -96,6 +90,7 @@ export const ForgotPasswordPage: React.FC = () => {
           label="Email Address"
           type="email"
           placeholder="your.email@example.com"
+          maxLength={EMAIL_MAX_LENGTH}
           value={email}
           onChange={(e) => {
             setEmail(e.target.value);

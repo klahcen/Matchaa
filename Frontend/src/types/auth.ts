@@ -21,6 +21,10 @@ export interface RegisterPayload {
   firstName: string;
   lastName: string;
   password: string;
+  /** Required by the backend: 'male' | 'female'. */
+  gender: 'male' | 'female';
+  /** The gender this user wants to see: 'male' | 'female'. */
+  sexual_preferences: 'male' | 'female';
 }
 
 export interface LoginPayload {

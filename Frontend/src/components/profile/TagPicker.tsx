@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { profileApi } from '../../api/profile';
 import type { Tag } from '../../types/profile';
+import { TAG_MAX_LENGTH, normalizeTagName, validateTagName } from '../../utils/validation';
 
 interface TagPickerProps {
   tags: Tag[];
@@ -26,6 +27,8 @@ export const TagPicker: React.FC<TagPickerProps> = ({ tags, onAdded, onRemoved, 
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [highlighted, setHighlighted] = useState(0);
+  // Inline problem with the tag being added (client rule or server answer).
+  const [inputError, setInputError] = useState<string | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -53,6 +56,7 @@ export const TagPicker: React.FC<TagPickerProps> = ({ tags, onAdded, onRemoved, 
 
   const handleInputChange = (value: string) => {
     setInput(value);
+    if (inputError) setInputError(null);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => runSearch(value), SEARCH_DEBOUNCE_MS);
   };
@@ -75,21 +79,34 @@ export const TagPicker: React.FC<TagPickerProps> = ({ tags, onAdded, onRemoved, 
   }, []);
 
   const commit = async (name: string) => {
-    const normalized = name.trim().replace(/^#/, '').toLowerCase();
-    if (!normalized) return;
+    // Same rules as the backend (2-30 chars, a-z 0-9 _ -, leading "#" dropped,
+    // lowercased), checked before any request is sent.
+    const problem = validateTagName(name);
+    if (problem) {
+      setInputError(problem);
+      return;
+    }
+    const normalized = normalizeTagName(name);
+    if (tags.some((t) => t.name.toLowerCase() === normalized)) {
+      setInputError(`#${normalized} is already on your profile`);
+      return;
+    }
 
+    setInputError(null);
     setBusy(true);
     try {
       const tag = await profileApi.addTag(normalized);
+      if (!tag) throw new Error('The tag could not be added. Please try again.');
       onAdded(tag);
       setInput('');
       setSuggestions([]);
       setOpen(false);
-      inputRef.current?.focus();
     } catch (err: any) {
-      onError(err?.message || 'Failed to add tag');
+      setInputError(err?.message || 'Failed to add tag');
     } finally {
       setBusy(false);
+      // Re-enabled input: give focus back so the next tag can be typed.
+      setTimeout(() => inputRef.current?.focus(), 0);
     }
   };
 
@@ -177,11 +194,18 @@ export const TagPicker: React.FC<TagPickerProps> = ({ tags, onAdded, onRemoved, 
               }}
               placeholder="vegan, geek, piercing..."
               autoComplete="off"
+              maxLength={TAG_MAX_LENGTH + 1}
               aria-label="Add an interest tag"
               aria-expanded={open}
+              aria-invalid={inputError ? true : undefined}
+              aria-describedby={inputError ? 'tag-input-error' : 'tag-input-help'}
               role="combobox"
               aria-controls="tag-suggestions"
-              className="w-full min-h-[46px] pl-8 pr-4 py-2.5 text-sm bg-brand-bg/80 border border-brand-border rounded-xl text-brand-text placeholder-brand-muted/70 outline-none transition-all duration-150 focus:bg-brand-surface focus:border-brand-accent focus:ring-3 focus:ring-brand-accent/20 disabled:opacity-60"
+              className={`w-full min-h-[46px] pl-8 pr-4 py-2.5 text-sm bg-brand-bg/80 border rounded-xl text-brand-text placeholder-brand-muted/70 outline-none transition-all duration-150 focus:bg-brand-surface focus:ring-3 disabled:opacity-60 ${
+                inputError
+                  ? 'border-brand-error-text/60 focus:border-brand-error-text focus:ring-brand-error-bg'
+                  : 'border-brand-border focus:border-brand-accent focus:ring-brand-accent/20'
+              }`}
             />
           </div>
           <button
@@ -221,7 +245,19 @@ export const TagPicker: React.FC<TagPickerProps> = ({ tags, onAdded, onRemoved, 
         )}
       </div>
 
-      <p className="text-xs text-brand-muted mt-2">
+      {inputError && (
+        <p id="tag-input-error" className="text-xs text-brand-error-text font-medium mt-2 flex items-center gap-1">
+          <svg className="w-3.5 h-3.5 shrink-0 fill-current" viewBox="0 0 20 20" aria-hidden="true">
+            <path
+              fillRule="evenodd"
+              d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z"
+              clipRule="evenodd"
+            />
+          </svg>
+          <span>{inputError}</span>
+        </p>
+      )}
+      <p id="tag-input-help" className="text-xs text-brand-muted mt-2">
         2–30 characters. Lowercase letters, numbers, underscores and hyphens — no spaces. Tags are
         shared across Matcha, so “Vegan” and “vegan” are the same tag.
       </p>

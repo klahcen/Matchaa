@@ -7,6 +7,7 @@ import { ErrorBanner } from '../components/common/ErrorBanner';
 import { PrimaryButton } from '../components/common/PrimaryButton';
 import { FameBadge } from '../components/profile/FameBadge';
 import { PhotoCarousel } from '../components/profileView/PhotoCarousel';
+import { useSocket } from '../context/SocketContext';
 import type { PublicProfileResponse, RelationshipState } from '../types/users';
 
 /**
@@ -22,9 +23,19 @@ import type { PublicProfileResponse, RelationshipState } from '../types/users';
  *
  * Real-time messages and notifications are handled by the shared app header
  * and Socket.io context while this page keeps the profile action state fresh.
+ * Online status is "Online" while the member has a connected socket, otherwise
+ * "Last seen <date and time>"; it updates live through `presence:watch`, which
+ * only subscribes to this one profile (the server never broadcasts presence).
  */
 
 type PendingAction = 'like' | 'unlike' | 'block' | 'unblock' | 'report' | null;
+
+/** Live status pushed by the server for the profile being viewed. */
+interface LivePresence {
+  userId: number;
+  online: boolean;
+  last_seen: string | null;
+}
 
 /** Quick-pick reasons offered in the report dialog, per the subject's "fake account" rule. */
 const REPORT_REASON_PRESETS = [
@@ -58,6 +69,7 @@ const formatMemberSince = (value: string): string | null => {
 export const ProfileViewPage: React.FC = () => {
   const { userId } = useParams<{ userId: string }>();
   const navigate = useNavigate();
+  const { socket, isConnected } = useSocket();
 
   const numericId = Number.parseInt(String(userId), 10);
   const isValidId = Number.isInteger(numericId) && numericId > 0;
@@ -80,6 +92,8 @@ export const ProfileViewPage: React.FC = () => {
   const [blockDialogOpen, setBlockDialogOpen] = useState(false);
   const [reportDialogOpen, setReportDialogOpen] = useState(false);
   const [reportReason, setReportReason] = useState('');
+
+  const [presence, setPresence] = useState<LivePresence | null>(null);
 
   useEffect(() => {
     if (!isValidId) {
@@ -116,6 +130,32 @@ export const ProfileViewPage: React.FC = () => {
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
+
+  const profileId = profile?.id ?? null;
+
+  // Subscribe to this profile's online status while the page is open. Rooms are
+  // per socket, so a reconnect (isConnected flips back) subscribes again.
+  useEffect(() => {
+    if (!socket || !isConnected || profileId === null) return;
+    let active = true;
+
+    const handleUpdate = (data: LivePresence) => {
+      if (data?.userId === profileId) setPresence({ userId: data.userId, online: data.online, last_seen: data.last_seen });
+    };
+
+    socket.on('presence:update', handleUpdate);
+    socket.emit('presence:watch', { userId: profileId }, (response: any) => {
+      if (active && response?.success) {
+        setPresence({ userId: profileId, online: Boolean(response.online), last_seen: response.last_seen ?? null });
+      }
+    });
+
+    return () => {
+      active = false;
+      socket.off('presence:update', handleUpdate);
+      socket.emit('presence:unwatch', { userId: profileId });
+    };
+  }, [isConnected, profileId, socket]);
 
   const clearMessages = () => {
     setActionError(null);
@@ -227,10 +267,13 @@ export const ProfileViewPage: React.FC = () => {
   // ------------------------------ Render ----------------------------------
 
   const fullName = profile ? `${profile.first_name} ${profile.last_name}`.trim() : '';
+  const livePresence = profile && presence?.userId === profile.id ? presence : null;
+  const isOnline = livePresence ? livePresence.online : Boolean(profile?.is_online);
+  const lastSeen = formatLastSeen(livePresence ? livePresence.last_seen : profile?.last_seen ?? null);
 
   return (
-    <div className="min-h-screen w-full bg-brand-bg">
-      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+    <div className="flex-1 w-full bg-brand-bg">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
         {loading && (
           <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
             <div className="aspect-[4/5] rounded-3xl bg-brand-border/60 animate-pulse" />
@@ -299,20 +342,18 @@ export const ProfileViewPage: React.FC = () => {
                 <p className="text-sm text-brand-muted mb-3">@{profile.username}</p>
 
                 {/* Online status / last connection */}
-                {profile.is_online ? (
+                {isOnline ? (
                   <p className="inline-flex items-center gap-2 text-xs font-bold text-green-600 bg-green-50 border border-green-200 rounded-full px-3 py-1.5 mb-4">
                     <span className="relative flex h-2.5 w-2.5">
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
                       <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500" />
                     </span>
-                    Online now
+                    Online
                   </p>
                 ) : (
                   <p className="inline-flex items-center gap-2 text-xs font-semibold text-brand-muted bg-brand-bg border border-brand-border rounded-full px-3 py-1.5 mb-4">
                     <Clock className="w-3.5 h-3.5" />
-                    {formatLastSeen(profile.last_seen)
-                      ? `Last seen ${formatLastSeen(profile.last_seen)}`
-                      : 'Last connection unknown'}
+                    {lastSeen ? `Last seen ${lastSeen}` : 'Last connection unknown'}
                   </p>
                 )}
 
@@ -512,7 +553,7 @@ export const ProfileViewPage: React.FC = () => {
             </div>
           </div>
         )}
-      </main>
+      </div>
 
       {/* Block confirmation */}
       <ConfirmDialog

@@ -31,8 +31,8 @@ router.post('/forgot-password', forgotPasswordRateLimiter, AuthController.forgot
 router.post('/reset-password', AuthController.resetPassword);
 router.post('/reset-password/:token', AuthController.resetPassword);
 
-// Logout (clears httpOnly cookie)
-router.post('/logout', AuthController.logout);
+// Logout (clears httpOnly cookie; optionalAuth identifies the session to revoke)
+router.post('/logout', optionalAuth, AuthController.logout);
 
 // Check current session (returns user if logged in, null if guest, without 401 console error)
 router.get('/me', optionalAuth, AuthController.me);

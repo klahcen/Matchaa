@@ -6,6 +6,7 @@ import type {
   UnblockResult,
   UnlikeResult,
 } from '../types/users';
+import { ApiError, toApiError } from './http';
 import { API_ROOT } from './profile';
 
 /**
@@ -16,21 +17,19 @@ import { API_ROOT } from './profile';
  * derived) and follows the same fetch pattern as api/browse.ts: httpOnly auth
  * cookie via credentials:'include', 10s timeout, standard envelope unwrapping.
  *
- * Unlike browse.ts, failures throw UsersApiError which keeps the HTTP status —
- * the page needs it to turn a 404 (missing profile OR blocked-by-target, the
+ * Failures throw UsersApiError (an ApiError) which keeps the HTTP status — the
+ * page needs it to turn a 404 (missing profile OR blocked-by-target, the
  * backend deliberately makes those indistinguishable) into the clean
- * "Profile not available" state instead of a generic error banner.
+ * "Profile not available" state instead of a generic error banner. It also
+ * carries `code`/`missing`, e.g. the 403 PROFILE_INCOMPLETE answer to a like.
  */
 
 const REQUEST_TIMEOUT_MS = 10_000;
 
-export class UsersApiError extends Error {
-  public readonly status: number;
-
-  constructor(message: string, status: number) {
-    super(message);
+export class UsersApiError extends ApiError {
+  constructor(message: string, status: number, code?: string, missing?: string[]) {
+    super(message, status, code, missing);
     this.name = 'UsersApiError';
-    this.status = status;
   }
 }
 
@@ -95,11 +94,8 @@ async function request<T>(
     }
 
     if (!response.ok) {
-      const message =
-        body?.message ||
-        (Array.isArray(body?.errors) && body.errors.length > 0 ? body.errors.join(', ') : null) ||
-        `Request failed with status ${response.status}`;
-      throw new UsersApiError(message, response.status);
+      const apiError = toApiError(response, body);
+      throw new UsersApiError(apiError.message, apiError.status, apiError.code, apiError.missing);
     }
 
     return (body?.data ?? (null as T)) as T;
@@ -121,7 +117,10 @@ export const usersApi = {
   getProfile: (userId: number, options?: { signal?: AbortSignal }): Promise<PublicProfileResponse> =>
     request<PublicProfileResponse>(`/users/${userId}`, { method: 'GET', signal: options?.signal }),
 
-  /** POST /api/users/:userId/like — 403 if I have no photo, 400 if already liked. */
+  /**
+   * POST /api/users/:userId/like — 403 if I have no photo or my profile is
+   * incomplete (code PROFILE_INCOMPLETE + missing[]), 400 if already liked.
+   */
   like: (userId: number): Promise<LikeResult> =>
     request<LikeResult>(`/users/${userId}/like`, { method: 'POST' }),
 

@@ -1,6 +1,6 @@
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
-import express, { Application, Request, Response } from 'express';
+import express, { Application, NextFunction, Request, Response } from 'express';
 import { env } from './config/env';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { authRoutes } from './routes/authRoutes';
@@ -18,10 +18,10 @@ export const createApp = (): Application => {
   // Only configured proxy addresses may influence req.ip; direct clients are untrusted.
   app.set('trust proxy', env.TRUSTED_PROXIES.length ? env.TRUSTED_PROXIES : false);
 
-  // Cross-Origin Resource Sharing
+  // Cross-Origin Resource Sharing (explicit allow-list only; '*' is rejected in env.ts)
   app.use(
     cors({
-      origin: env.CORS_ORIGIN === '*' ? true : env.CORS_ORIGIN.split(',').map((o) => o.trim()),
+      origin: env.CORS_ORIGINS,
       credentials: true, // Allow cookies to be sent
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization'],
@@ -35,6 +35,13 @@ export const createApp = (): Application => {
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
+  // Express 5 leaves req.body undefined when no body was sent; normalize it so
+  // handlers reading req.body.x answer with a 400 instead of crashing with a 500.
+  app.use((req: Request, _res: Response, next: NextFunction) => {
+    if (req.body === undefined) req.body = {};
+    next();
+  });
+
   // Basic health check endpoint
   app.get('/api/health', (_req: Request, res: Response) => {
     res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -43,7 +50,15 @@ export const createApp = (): Application => {
   // Serve uploaded profile photos statically (public by design: they are
   // shown on other users' profiles). Path comes from env.UPLOAD_DIR so it
   // resolves identically under src/ (tsx) and dist/ (compiled build).
-  app.use('/uploads', express.static(env.UPLOAD_DIR));
+  // nosniff stops browsers from executing an upload as anything but its declared type.
+  app.use(
+    '/uploads',
+    (_req: Request, res: Response, next: NextFunction) => {
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      next();
+    },
+    express.static(env.UPLOAD_DIR)
+  );
 
   // Mount authentication routes
   app.use('/api/auth', authRoutes);

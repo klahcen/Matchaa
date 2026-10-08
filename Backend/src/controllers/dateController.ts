@@ -4,11 +4,12 @@ import { AppError } from '../utils/AppError';
 import { areUsersConnected } from '../db/queries/messageQueries';
 import {
   createDateProposal,
+  findPendingDateProposer,
   getDateProposalsBetween,
   respondToDateProposal,
   type DateStatus,
 } from '../db/queries/dateQueries';
-import { createNotification } from '../db/queries/notificationQueries';
+import { notifyUser } from '../sockets/socketServer';
 
 const parsePositiveId = (value: unknown, label: string): number => {
   const raw = Array.isArray(value) ? value[0] : value;
@@ -17,11 +18,18 @@ const parsePositiveId = (value: unknown, label: string): number => {
   return id;
 };
 
+// ISO 8601 with an explicit offset ("Z" or "+01:00"). A bare local time would be
+// read in the server's timezone (UTC in the container), shifting the date.
+const ISO_DATETIME_WITH_ZONE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/;
+
 const parseDateTime = (value: unknown): Date => {
   if (typeof value !== 'string' || !value.trim()) {
     throw AppError.badRequest('proposed_datetime is required');
   }
-  const date = new Date(value);
+  if (!ISO_DATETIME_WITH_ZONE.test(value.trim())) {
+    throw AppError.badRequest('proposed_datetime must be an ISO 8601 date/time with a timezone');
+  }
+  const date = new Date(value.trim());
   if (Number.isNaN(date.getTime())) throw AppError.badRequest('proposed_datetime must be a valid date/time');
   if (date.getTime() <= Date.now()) throw AppError.badRequest('Proposed date/time must be in the future');
   return date;
@@ -68,16 +76,9 @@ export class DateController {
       const note = optionalText(body.note, 'Note', 1000);
 
       const proposal = await createDateProposal({ proposerId, recipientId, proposedDatetime, locationText, note });
-      const content = `${req.user!.first_name} proposed a date`;
-      await createNotification(recipientId, 'date_proposed', proposerId, content);
+      await notifyUser(recipientId, 'date_proposed', proposerId, `${req.user!.first_name} proposed a date`);
 
       const io = (global as any).io;
-      io?.to(`user:${recipientId}`).emit('notification:new', {
-        type: 'date_proposed',
-        from_user: { id: req.user!.id, first_name: req.user!.first_name, username: req.user!.username },
-        content,
-        created_at: new Date().toISOString(),
-      });
       io?.to(`user:${recipientId}`).to(`user:${proposerId}`).emit('date:new', proposal);
 
       res.status(201).json({ success: true, message: 'Date proposed', data: { date: proposal } });
@@ -95,19 +96,18 @@ export class DateController {
         throw AppError.badRequest('status must be accepted or declined');
       }
 
+      const proposerId = await findPendingDateProposer(dateId, recipientId);
+      if (proposerId === null) throw AppError.notFound('Pending date proposal not found');
+      // Unliking or blocking after the proposal was sent ends the connection.
+      const connected = await areUsersConnected(recipientId, proposerId);
+      if (!connected) throw AppError.forbidden('You can only respond to dates from connected users');
+
       const updated = await respondToDateProposal(dateId, recipientId, status);
       if (!updated) throw AppError.notFound('Pending date proposal not found');
 
-      const content = `${req.user!.first_name} ${status} your date proposal`;
-      await createNotification(updated.proposer_id, 'date_response', recipientId, content);
+      await notifyUser(updated.proposer_id, 'date_response', recipientId, `${req.user!.first_name} ${status} your date proposal`);
 
       const io = (global as any).io;
-      io?.to(`user:${updated.proposer_id}`).emit('notification:new', {
-        type: 'date_response',
-        from_user: { id: req.user!.id, first_name: req.user!.first_name, username: req.user!.username },
-        content,
-        created_at: new Date().toISOString(),
-      });
       io?.to(`user:${updated.proposer_id}`).to(`user:${updated.recipient_id}`).emit('date:updated', updated);
 
       res.status(200).json({ success: true, message: `Date ${status}`, data: { date: updated } });

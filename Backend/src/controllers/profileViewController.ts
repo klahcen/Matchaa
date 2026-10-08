@@ -10,35 +10,29 @@ import {
 import {
   findPublicProfileById,
   findRelationshipState,
-  isUserOnline,
   recordProfileView,
   userExists,
   userHasProfilePicture,
-  ONLINE_WINDOW_MINUTES,
   PublicProfile,
   RelationshipState,
 } from '../db/queries/profileViewQueries';
 import { createReport } from '../db/queries/reportQueries';
 import { findUserById } from '../db/queries/userQueries';
 import { recalculateFameRating } from '../services/fameRatingService';
-import { createNotification } from '../db/queries/notificationQueries';
+import { muteNotificationsFrom, unmuteNotificationsFrom } from '../db/queries/notificationQueries';
+import { isUserOnline, notifyUser, stopPresenceBetween } from '../sockets/socketServer';
 import { AuthenticatedRequest } from '../types';
 import { AppError } from '../utils/AppError';
-
-const getIo = (): any => (global as any).io;
 
 /**
  * Profile View controller — GET /api/users/:userId plus the like, block and
  * report actions available from that screen.
  *
- * REAL-TIME NOTE: the spec requires the other user to receive a notification
- * within 10 seconds for "like received" and "profile viewed" events. This
- * controller performs the DATABASE side of that contract now (views and likes
- * rows are written correctly, fame is recalculated) and returns a
- * `pending_notifications` array describing what should be pushed. Actual
- * delivery (Socket.io / websocket fan-out) is deliberately NOT implemented here
- * — it belongs to the dedicated Notifications feature, which will consume these
- * same events. No websocket code is introduced as a side effect.
+ * REAL-TIME NOTE: "like received", "profile viewed", "connected" and "unliked"
+ * notifications are stored and pushed over Socket.io through notifyUser, which
+ * drops them when the recipient muted the actor (by unliking them), a block
+ * exists either way, or the same notification was sent recently. The
+ * `pending_notifications` arrays in the responses describe what was triggered.
  */
 
 // ---------------------------------------------------------------------------
@@ -126,11 +120,12 @@ const resolveInteractionTarget = async (
 };
 
 /**
- * Builds the public profile payload, including derived online status.
+ * Builds the public profile payload, including live online status.
  *
- * The DB column is `last_connection`; it is exposed as `last_seen` (the name the
- * subject uses) and the raw column is dropped so the response does not carry the
- * same timestamp twice.
+ * Online means the user has at least one connected socket right now. The DB
+ * column `last_connection` (written on socket connect and on the last socket's
+ * disconnect) is exposed as `last_seen`, the name the subject uses, and the raw
+ * column is dropped so the response does not carry the same timestamp twice.
  */
 const toPublicPayload = (
   profile: PublicProfile,
@@ -140,9 +135,8 @@ const toPublicPayload = (
   const { last_connection, ...publicProfile } = profile;
   return {
     ...publicProfile,
-    is_online: isUserOnline(last_connection),
+    is_online: isUserOnline(profile.id),
     last_seen: last_connection,
-    online_window_minutes: ONLINE_WINDOW_MINUTES,
     relationship,
     viewer: {
       has_profile_picture: viewerCanLike,
@@ -200,19 +194,8 @@ export class ProfileViewController {
           // Skipping the recalculation on repeat visits avoids a pointless write.
           await recalculateFameRating(targetId);
 
-          // Persist notification in DB (only on first view to avoid spam)
-          await createNotification(targetId, 'view', viewerId, `${req.user!.first_name} viewed your profile`);
-
-          // Emit real-time notification via Socket.io
-          const io = getIo();
-          if (io) {
-            io.to(`user:${targetId}`).emit('notification:new', {
-              type: 'view',
-              from_user: { id: viewerId, first_name: req.user!.first_name, username: req.user!.username },
-              content: `${req.user!.first_name} viewed your profile`,
-              created_at: new Date().toISOString(),
-            });
-          }
+          // Store and push the notification (only on first view to avoid spam).
+          await notifyUser(targetId, 'view', viewerId, `${req.user!.first_name} viewed your profile`);
 
           pendingNotifications = [
             {
@@ -266,24 +249,16 @@ export class ProfileViewController {
       }
 
       await createLike(viewerId, targetId);
+      // Liking again lifts the mute set when the viewer last unliked the target.
+      await unmuteNotificationsFrom(viewerId, targetId);
 
       // A like is worth +3 to the TARGET's fame rating.
       const targetFame = await recalculateFameRating(targetId);
 
       const nowConnected = await isMutualLike(viewerId, targetId);
 
-      // Persist and emit 'like_received' notification
-      await createNotification(targetId, 'like', viewerId, `${req.user!.first_name} liked your profile`);
-
-      const io = getIo();
-      if (io) {
-        io.to(`user:${targetId}`).emit('notification:new', {
-          type: 'like',
-          from_user: { id: viewerId, first_name: req.user!.first_name, username: req.user!.username },
-          content: `${req.user!.first_name} liked your profile`,
-          created_at: new Date().toISOString(),
-        });
-      }
+      // Store and push the 'like' notification (deduped against like/unlike loops).
+      await notifyUser(targetId, 'like', viewerId, `${req.user!.first_name} liked your profile`);
 
       let connectionNotifications: any[] = [];
 
@@ -293,16 +268,7 @@ export class ProfileViewController {
         // Each recipient sees their counterpart in both the stored row and socket payload.
         for (const [recipientId, counterpart] of [[viewerId, target], [targetId, req.user!]] as const) {
           const content = `You and ${counterpart.first_name} liked each other — you are now connected!`;
-          await createNotification(recipientId, 'new_connection', counterpart.id, content);
-          if (io) {
-            io.to(`user:${recipientId}`).emit('notification:new', {
-              type: 'new_connection',
-              from_user: { id: counterpart.id, first_name: counterpart.first_name, username: counterpart.username },
-              with_user_id: counterpart.id,
-              content,
-              created_at: new Date().toISOString(),
-            });
-          }
+          await notifyUser(recipientId, 'new_connection', counterpart.id, content);
         }
 
         connectionNotifications = [
@@ -353,7 +319,8 @@ export class ProfileViewController {
    *
    * Removes the viewer's like. Because connection is derived from mutual likes,
    * this immediately breaks any connection and therefore any future chat — no
-   * separate connection row exists to clean up.
+   * separate connection row exists to clean up. The viewer also mutes the target,
+   * so no further notifications from them reach the viewer until they like again.
    */
   static async unlike(
     req: AuthenticatedRequest,
@@ -370,22 +337,14 @@ export class ProfileViewController {
         throw AppError.badRequest('You have not liked this member');
       }
 
+      await muteNotificationsFrom(viewerId, targetId);
+
       // The target loses the +3 this like contributed.
       const targetFame = await recalculateFameRating(targetId);
 
       if (wasConnected) {
-        // Persist and emit 'unlike' notification to the user who got unliked
-        await createNotification(targetId, 'unlike', viewerId, `${req.user!.first_name} removed their like`);
-
-        const io = getIo();
-        if (io) {
-          io.to(`user:${targetId}`).emit('notification:new', {
-            type: 'unlike',
-            from_user: { id: viewerId, first_name: req.user!.first_name, username: req.user!.username },
-            content: `${req.user!.first_name} removed their like`,
-            created_at: new Date().toISOString(),
-          });
-        }
+        // Store and push the 'unlike' notification to the user who got unliked.
+        await notifyUser(targetId, 'unlike', viewerId, `${req.user!.first_name} removed their like`);
       }
 
       res.status(200).json({
@@ -434,6 +393,8 @@ export class ProfileViewController {
 
       const wasConnected = relationship.is_connected;
       const likesRemoved = await removeLikesBetween(viewerId, targetId);
+      // Live online status must not keep flowing between a blocked pair.
+      stopPresenceBetween(viewerId, targetId);
 
       // Removing likes changes fame on both sides.
       const [viewerFame, targetFame] = await Promise.all([

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { profileIncompleteMissing } from '../api/http';
 import { fetchSearchResults } from '../api/search';
 import { BrowseEmptyState } from '../components/browse/BrowseEmptyState';
 import { FilterPanel } from '../components/browse/FilterPanel';
@@ -56,6 +57,8 @@ export const ResearchPage: React.FC = () => {
   const [data, setData] = useState<SearchResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Set when the backend gates search (403 PROFILE_INCOMPLETE): what is missing.
+  const [incomplete, setIncomplete] = useState<string[] | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const requestKey = JSON.stringify({ applied, sortBy, sortOrder, page, limit });
@@ -77,10 +80,17 @@ export const ResearchPage: React.FC = () => {
         );
         setData(result);
         setError(null);
+        setIncomplete(null);
       } catch (err: any) {
         if (controller.signal.aborted) return;
         setData(null);
-        setError(err?.message || 'Failed to load research results');
+        const missing = profileIncompleteMissing(err);
+        if (missing) {
+          setIncomplete(missing);
+          setError(null);
+        } else {
+          setError(err?.message || 'Failed to load research results');
+        }
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }
@@ -130,9 +140,21 @@ export const ResearchPage: React.FC = () => {
     />
   );
 
+  if (incomplete) {
+    return (
+      <div className="flex-1 w-full bg-brand-bg">
+        <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
+          <h1 className="sr-only">Research members</h1>
+          <BrowseEmptyState variant="profile-incomplete" missing={incomplete} />
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen w-full bg-brand-bg">
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+    // The page sits inside the app layout's <main>, so it uses plain containers.
+    <div className="flex-1 w-full bg-brand-bg">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
         <div className="lg:hidden mb-4 flex items-center justify-between gap-3">
           <button
             type="button"
@@ -249,7 +271,7 @@ export const ResearchPage: React.FC = () => {
             )}
           </div>
         </div>
-      </main>
+      </div>
 
       {drawerOpen && (
         <div className="lg:hidden fixed inset-0 z-50 flex">

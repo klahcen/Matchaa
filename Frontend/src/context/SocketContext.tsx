@@ -26,6 +26,8 @@ interface SocketContextType {
   setUnreadMessageCount: (count: number) => void;
   markNotificationRead: (id: number) => void;
   markConversationRead: (conversationId: number) => void;
+  /** The conversation open in ChatPage; its incoming messages are not counted as unread. */
+  setActiveConversation: (conversationId: number | null) => void;
   clearIncomingCall: () => void;
   rejectIncomingCall: () => void;
 }
@@ -48,18 +50,33 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const socketRef = useRef<Socket | null>(null);
   const initializedRef = useRef(false);
   const conversationsRef = useRef<Conversation[]>([]);
+  const notificationsRef = useRef<Notification[]>([]);
+  const activeConversationRef = useRef<number | null>(null);
 
   useEffect(() => {
     conversationsRef.current = conversations;
   }, [conversations]);
 
+  useEffect(() => {
+    notificationsRef.current = notifications;
+  }, [notifications]);
+
   const addNotification = useCallback((notification: Notification) => {
-    setNotifications((prev) => [notification, ...prev].slice(0, 100));
-    setUnreadNotificationCount((prev) => prev + 1);
+    if (notificationsRef.current.some((n) => n.id === notification.id)) return;
+    setNotifications((prev) =>
+      prev.some((n) => n.id === notification.id) ? prev : [notification, ...prev].slice(0, 100)
+    );
+    if (!notification.is_read) setUnreadNotificationCount((prev) => prev + 1);
+  }, []);
+
+  const setActiveConversation = useCallback((conversationId: number | null) => {
+    activeConversationRef.current = conversationId;
   }, []);
 
   const addMessage = useCallback((message: Message, conversationId: number) => {
-    const isIncoming = message.receiver_id === user?.id;
+    // Messages arriving in the open conversation are read on arrival (ChatPage
+    // tells the server via `message:read`), so they never count as unread.
+    const countsAsUnread = message.receiver_id === user?.id && activeConversationRef.current !== conversationId;
     setConversations((prev) =>
       prev.map((conv) =>
         conv.id === conversationId
@@ -68,12 +85,12 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               last_message_content: message.content,
               last_message_at: message.created_at,
               last_message_sender_id: message.sender_id,
-              unread_count: isIncoming ? conv.unread_count + 1 : conv.unread_count,
+              unread_count: countsAsUnread ? conv.unread_count + 1 : conv.unread_count,
             }
           : conv
       )
     );
-    if (isIncoming) setUnreadMessageCount((prev) => prev + 1);
+    if (countsAsUnread) setUnreadMessageCount((prev) => prev + 1);
   }, [user?.id]);
 
   const incrementUnreadNotifications = useCallback(() => {
@@ -93,6 +110,8 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, []);
 
   const markNotificationRead = useCallback((id: number) => {
+    const target = notificationsRef.current.find((n) => n.id === id);
+    if (!target || target.is_read) return;
     setNotifications((prev) =>
       prev.map((n) => (n.id === id ? { ...n, is_read: true } : n))
     );
@@ -147,39 +166,36 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
 
     newSocket.on('connect', () => {
-      console.log('[Socket] Connected:', newSocket.id);
       setIsConnected(true);
     });
 
-    newSocket.on('disconnect', (reason) => {
-      console.log('[Socket] Disconnected:', reason);
+    newSocket.on('disconnect', () => {
       setIsConnected(false);
     });
 
-    newSocket.on('connect_error', (error) => {
-      console.error('[Socket] Connection error:', error.message);
+    // socket.io keeps retrying on its own; the UI only needs the flag.
+    newSocket.on('connect_error', () => {
       setIsConnected(false);
     });
 
-    newSocket.on('notification:new', (data: any) => {
-      console.log('[Socket] Notification received:', data);
-      const notification: Notification = {
-        id: Date.now(),
-        user_id: user.id,
+    // Every emit carries the stored row, so the real id is used for mark-as-read.
+    newSocket.on('notification:new', (data: Partial<Notification> | null) => {
+      if (!data || typeof data.id !== 'number' || !data.type) return;
+      addNotification({
+        id: data.id,
+        user_id: data.user_id ?? user.id,
         type: data.type,
-        related_user_id: data.from_user?.id || data.with_user_id || null,
-        content: data.content,
-        is_read: false,
-        created_at: data.created_at,
-        related_user_first_name: data.from_user?.first_name || null,
-        related_user_username: data.from_user?.username || null,
-        related_user_photo_url: null,
-      };
-      addNotification(notification);
+        related_user_id: data.related_user_id ?? null,
+        content: data.content ?? '',
+        is_read: Boolean(data.is_read),
+        created_at: data.created_at ?? new Date().toISOString(),
+        related_user_first_name: data.related_user_first_name ?? null,
+        related_user_username: data.related_user_username ?? null,
+        related_user_photo_url: data.related_user_photo_url ?? null,
+      });
     });
 
     newSocket.on('message:new', (message: Message) => {
-      console.log('[Socket] New message:', message);
       addMessage(message, message.sender_id);
     });
 
@@ -190,7 +206,6 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
 
     newSocket.on('call:incoming', (data: IncomingCall) => {
-      console.log('[Socket] Incoming call:', data);
       setIncomingCall(data);
     });
 
@@ -201,14 +216,6 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     newSocket.on('call:cancelled', clearCallIfCurrent);
     newSocket.on('call:ended', clearCallIfCurrent);
     newSocket.on('call:rejected', clearCallIfCurrent);
-
-    newSocket.on('user:online', (data: { userId: number }) => {
-      console.log('[Socket] User online:', data.userId);
-    });
-
-    newSocket.on('user:offline', (data: { userId: number }) => {
-      console.log('[Socket] User offline:', data.userId);
-    });
 
     socketRef.current = newSocket;
     setSocket(newSocket);
@@ -244,6 +251,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setUnreadMessageCount,
         markNotificationRead,
         markConversationRead,
+        setActiveConversation,
         clearIncomingCall,
         rejectIncomingCall,
       }}

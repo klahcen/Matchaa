@@ -1,16 +1,13 @@
 
-
 node_modules
-./Backend/node_modules
-./Frontend/node_modules
 
+# Local environment files hold credentials: ignore them in every directory,
+# but keep the committed templates.
 .env
-./Backend/.env
-./Frontend/.env
+.env.*
+!.env.example
 
 dist
-./Backend/dist
-./Frontend/dist
 
 
 test-reports/

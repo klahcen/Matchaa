@@ -1,4 +1,5 @@
 import type { BrowseQuery, SuggestionsResponse } from '../types/browse';
+import { toApiError } from './http';
 import { API_ROOT } from './profile';
 
 /**
@@ -35,6 +36,7 @@ export const buildSuggestionsQueryString = (query: BrowseQuery): string => {
 
   setNumber('page', query.page);
   setNumber('limit', query.limit);
+  if (query.swipe) params.set('swipe', 'true');
 
   const qs = params.toString();
   return qs ? `?${qs}` : '';
@@ -96,11 +98,7 @@ export const fetchSuggestions = async (
     }
 
     if (!response.ok) {
-      const message =
-        body?.message ||
-        (Array.isArray(body?.errors) && body.errors.length > 0 ? body.errors.join(', ') : null) ||
-        `Request failed with status ${response.status}`;
-      throw new Error(message);
+      throw toApiError(response, body);
     }
 
     if (!body?.data) {
@@ -113,3 +111,34 @@ export const fetchSuggestions = async (
     callerSignal?.removeEventListener('abort', forwardCallerAbort);
   }
 };
+
+/** Shared by the swipe actions below: credentials, JSON, ApiError on failure. */
+const swipeRequest = async (path: string, method: 'POST' | 'DELETE'): Promise<void> => {
+  let response: Response;
+  try {
+    response = await fetch(`${API_ROOT}${path}`, {
+      method,
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+  } catch {
+    throw new Error('Unable to connect to Matcha server. Is the backend running on port 3000?');
+  }
+
+  if (!response.ok) {
+    let body: any = null;
+    try {
+      body = await response.json();
+    } catch {
+      body = null;
+    }
+    throw toApiError(response, body);
+  }
+};
+
+/** POST /api/browse/passes/:userId — swipe left; private, notifies no one. */
+export const passProfile = (userId: number): Promise<void> =>
+  swipeRequest(`/browse/passes/${userId}`, 'POST');
+
+/** DELETE /api/browse/passes — "Start over": passed profiles can be dealt again. */
+export const resetPasses = (): Promise<void> => swipeRequest('/browse/passes', 'DELETE');

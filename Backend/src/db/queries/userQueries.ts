@@ -48,8 +48,8 @@ export interface CreateUserData {
   passwordHash: string;
   verificationToken: string;
   verificationTokenExpiresAt: Date;
-  gender?: 'male' | 'female';
-  sexualPreferences?: 'male' | 'female';
+  gender: 'male' | 'female';
+  sexualPreferences: 'male' | 'female';
 }
 
 /**
@@ -70,7 +70,7 @@ export const createUser = async (data: CreateUserData): Promise<User> => {
       sexual_preferences,
       is_verified
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, 'male')::user_gender, COALESCE($9, 'female')::user_sexual_preference, FALSE)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8::user_gender, $9::user_sexual_preference, FALSE)
     RETURNING *;
   `;
 
@@ -82,8 +82,8 @@ export const createUser = async (data: CreateUserData): Promise<User> => {
     data.passwordHash,
     data.verificationToken,
     data.verificationTokenExpiresAt,
-    data.gender ?? null,
-    data.sexualPreferences ?? null,
+    data.gender,
+    data.sexualPreferences,
   ];
 
   const result = await query<User>(sql, values);
@@ -240,7 +240,8 @@ export const findUserByResetToken = async (token: string): Promise<User | null> 
 };
 
 /**
- * Updates a user's password hash and clears the reset token.
+ * Updates a user's password hash, clears the reset token and bumps token_version
+ * so every session opened with the old password is revoked.
  */
 export const updateUserPassword = async (
   userId: number,
@@ -251,10 +252,23 @@ export const updateUserPassword = async (
     SET password_hash = $1,
         reset_token = NULL,
         reset_token_expires_at = NULL,
+        token_version = token_version + 1,
         updated_at = CURRENT_TIMESTAMP
     WHERE id = $2;
   `;
   await query(sql, [passwordHash, userId]);
+};
+
+/**
+ * Revokes every JWT issued to a user so far (tokens carry the version they were signed with).
+ */
+export const incrementTokenVersion = async (userId: number): Promise<void> => {
+  const sql = `
+    UPDATE users
+    SET token_version = token_version + 1
+    WHERE id = $1;
+  `;
+  await query(sql, [userId]);
 };
 
 /**

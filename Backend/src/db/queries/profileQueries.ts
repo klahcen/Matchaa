@@ -1,5 +1,7 @@
-import { query } from '../../config/db';
+import { PoolClient } from 'pg';
+import { pool, query } from '../../config/db';
 import { User } from '../../types';
+import { AppError } from '../../utils/AppError';
 
 /**
  * Row shape of the `photos` table.
@@ -134,6 +136,45 @@ export const findProfileById = async (userId: number): Promise<FullProfile | nul
 };
 
 /**
+ * Raw inputs of the "profile complete" rule (evaluated in fameRatingService).
+ * One round-trip; null when the user does not exist.
+ */
+export interface ProfileCompletionFactsRow {
+  biography: string | null;
+  locationText: string | null;
+  tagCount: number;
+  photoCount: number;
+  hasProfilePicture: boolean;
+}
+
+export const findProfileCompletionFacts = async (
+  userId: number
+): Promise<ProfileCompletionFactsRow | null> => {
+  const sql = `
+    SELECT
+      u.biography,
+      u.location_text,
+      (SELECT COUNT(*)::int FROM user_tags ut WHERE ut.user_id = u.id) AS tag_count,
+      (SELECT COUNT(*)::int FROM photos p WHERE p.user_id = u.id) AS photo_count,
+      EXISTS (SELECT 1 FROM photos p
+              WHERE p.user_id = u.id AND p.is_profile_picture = TRUE) AS has_profile_picture
+    FROM users u
+    WHERE u.id = $1
+    LIMIT 1;
+  `;
+  const result = await query<Record<string, any>>(sql, [userId]);
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    biography: row.biography,
+    locationText: row.location_text,
+    tagCount: row.tag_count ?? 0,
+    photoCount: row.photo_count ?? 0,
+    hasProfilePicture: Boolean(row.has_profile_picture),
+  };
+};
+
+/**
  * Dynamically builds an UPDATE statement for only the fields present in `data`.
  * All values are parameterized ($1, $2, ...) — never interpolated into SQL.
  * Returns null when there is nothing to update.
@@ -178,7 +219,8 @@ export const updateProfile = async (
 };
 
 /**
- * Counts how many photos a user already owns (enforces the 5-photo cap).
+ * Counts how many photos a user already owns. The 5-photo cap itself is
+ * enforced atomically by insertPhotoWithinLimit.
  */
 export const countUserPhotos = async (userId: number): Promise<number> => {
   const result = await query<{ count: number }>(
@@ -227,26 +269,160 @@ export const deletePhotoRow = async (photoId: number): Promise<number> => {
   return result.rowCount ?? 0;
 };
 
+// ---------------------------------------------------------------------------
+// Photo mutations (serialized per user)
+// ---------------------------------------------------------------------------
+
+/**
+ * Runs `work` in a transaction that first locks the owner's users row, so all
+ * photo mutations of ONE user (upload, delete, set-profile-picture) run one at
+ * a time. That is what makes the 5-photo cap and the "exactly one profile
+ * picture" invariant hold under concurrent requests; a plain count-then-insert
+ * would let two parallel uploads both see 4 photos and both insert.
+ *
+ * FOR NO KEY UPDATE conflicts with itself (so it serializes these transactions)
+ * but not with the KEY SHARE locks taken by foreign-key checks, so likes, views
+ * or messages referencing this user are never blocked by a photo change.
+ */
+const withUserPhotoLock = async <T>(
+  userId: number,
+  work: (client: PoolClient) => Promise<T>
+): Promise<T> => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const locked = await client.query('SELECT id FROM users WHERE id = $1 FOR NO KEY UPDATE', [
+      userId,
+    ]);
+    if (locked.rowCount === 0) {
+      throw AppError.notFound('Profile not found');
+    }
+    const result = await work(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+/**
+ * Atomically enforces the per-user photo cap and inserts the photo.
+ * Returns null (and inserts nothing) when the user already has `maxPhotos`.
+ * The new photo becomes the profile picture when the user has none yet.
+ */
+export const insertPhotoWithinLimit = async (
+  userId: number,
+  url: string,
+  maxPhotos: number
+): Promise<PhotoRow | null> =>
+  withUserPhotoLock(userId, async (client) => {
+    const state = await client.query<{ count: number; has_profile_picture: boolean }>(
+      `SELECT COUNT(*)::int AS count,
+              COALESCE(BOOL_OR(is_profile_picture), FALSE) AS has_profile_picture
+       FROM photos WHERE user_id = $1`,
+      [userId]
+    );
+    const { count, has_profile_picture } = state.rows[0];
+    if (count >= maxPhotos) return null;
+
+    const inserted = await client.query<PhotoRow>(
+      `INSERT INTO photos (user_id, url, is_profile_picture)
+       VALUES ($1, $2, $3)
+       RETURNING *`,
+      [userId, url, !has_profile_picture]
+    );
+    return inserted.rows[0];
+  });
+
+export interface PhotoDeletion {
+  deleted: PhotoRow;
+  /** Photo promoted to profile picture because none was left, or null. */
+  promoted: PhotoRow | null;
+  remainingCount: number;
+}
+
+/**
+ * Deletes one of the user's photos. If that leaves photos but no profile
+ * picture (the deleted one was it), the OLDEST remaining photo is promoted in
+ * the same transaction, so the user never ends up without one while they still
+ * have photos. Returns null when the photo does not exist or is not theirs.
+ */
+export const deletePhotoForUser = async (
+  photoId: number,
+  userId: number
+): Promise<PhotoDeletion | null> =>
+  withUserPhotoLock(userId, async (client) => {
+    const removed = await client.query<PhotoRow>(
+      `DELETE FROM photos WHERE id = $1 AND user_id = $2 RETURNING *`,
+      [photoId, userId]
+    );
+    const deleted = removed.rows[0];
+    if (!deleted) return null;
+
+    const promotedRes = await client.query<PhotoRow>(
+      `UPDATE photos SET is_profile_picture = TRUE
+       WHERE id = (SELECT id FROM photos WHERE user_id = $1
+                   ORDER BY created_at ASC, id ASC LIMIT 1)
+         AND NOT EXISTS (SELECT 1 FROM photos
+                         WHERE user_id = $1 AND is_profile_picture = TRUE)
+       RETURNING *`,
+      [userId]
+    );
+
+    const remaining = await client.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM photos WHERE user_id = $1`,
+      [userId]
+    );
+
+    return {
+      deleted,
+      promoted: promotedRes.rows[0] ?? null,
+      remainingCount: remaining.rows[0]?.count ?? 0,
+    };
+  });
+
 /**
  * Promotes a photo to profile picture, unsetting any previous one for that user.
  *
- * A single atomic UPDATE: the targeted photo becomes TRUE and every other photo
- * owned by this user becomes FALSE. Scoped by user_id, so a user can never touch
- * another user's photos. Being one statement, it cannot leave the user with two
- * profile pictures mid-way (the partial unique index also guards this).
+ * Scoped by user_id, so a user can never touch another user's photos. Runs under
+ * the per-user photo lock and re-checks the photo still exists, so a concurrent
+ * delete can't leave the user with no profile picture. The old flag is cleared
+ * BEFORE the new one is set: the partial unique index is checked row by row, so
+ * a single "SET is_profile_picture = (id = $1)" could briefly see two TRUE rows.
+ * Returns false when the photo is gone or not owned by the user.
  */
-export const setProfilePicture = async (photoId: number, userId: number): Promise<void> => {
-  await query(
-    `UPDATE photos
-     SET is_profile_picture = (id = $1)
-     WHERE user_id = $2`,
-    [photoId, userId]
-  );
-};
+export const setProfilePicture = async (photoId: number, userId: number): Promise<boolean> =>
+  withUserPhotoLock(userId, async (client) => {
+    const target = await client.query(`SELECT 1 FROM photos WHERE id = $1 AND user_id = $2`, [
+      photoId,
+      userId,
+    ]);
+    if (target.rowCount === 0) return false;
+
+    await client.query(
+      `UPDATE photos SET is_profile_picture = FALSE
+       WHERE user_id = $1 AND is_profile_picture = TRUE AND id <> $2`,
+      [userId, photoId]
+    );
+    await client.query(`UPDATE photos SET is_profile_picture = TRUE WHERE id = $1`, [photoId]);
+    return true;
+  });
+
+/**
+ * Excludes anyone with a block between them and the listing owner ($1), in
+ * either direction, mirroring the candidate pool's rule.
+ */
+const NOT_BLOCKED_EITHER_WAY = `
+      NOT EXISTS (SELECT 1 FROM blocks b WHERE b.blocker_id = $1 AND b.blocked_id = u.id)
+      AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.blocker_id = u.id AND b.blocked_id = $1)`;
 
 /**
  * Lists users who viewed this profile, most recent first.
  * If a viewer has been seen multiple times, only their most recent view is shown.
+ * Users blocked in either direction are left out.
  */
 export const findViewsForUser = async (userId: number): Promise<ProfileSummary[]> => {
   const sql = `
@@ -263,6 +439,7 @@ export const findViewsForUser = async (userId: number): Promise<ProfileSummary[]
       GROUP BY viewer_id
     ) v
     JOIN users u ON u.id = v.viewer_id
+    WHERE ${NOT_BLOCKED_EITHER_WAY}
     ORDER BY v.latest_view DESC;
   `;
   const result = await query<Record<string, any>>(sql, [userId]);
@@ -271,6 +448,7 @@ export const findViewsForUser = async (userId: number): Promise<ProfileSummary[]
 
 /**
  * Lists users who liked this profile, most recent first.
+ * Users blocked in either direction are left out.
  */
 export const findLikesForUser = async (userId: number): Promise<ProfileSummary[]> => {
   const sql = `
@@ -283,6 +461,7 @@ export const findLikesForUser = async (userId: number): Promise<ProfileSummary[]
     FROM likes l
     JOIN users u ON u.id = l.liker_id
     WHERE l.liked_id = $1
+      AND ${NOT_BLOCKED_EITHER_WAY}
     ORDER BY l.created_at DESC;
   `;
   const result = await query<Record<string, any>>(sql, [userId]);

@@ -15,6 +15,13 @@ import { buildGeoSignalsSql } from '../../services/matchScoringService';
  *     tag match (ANY by default, ALL optional)
  *   - getViewerOrientation
  *
+ * Location privacy: other users' exact coordinates never leave this module.
+ * The candidate rows are read through `grid_users`, which snaps latitude and
+ * longitude to a ~1 km grid (LOCATION_GRID_DECIMALS) BEFORE any distance,
+ * same-area flag, sort key, relevance score or map position is computed. So
+ * nothing derived from a candidate's location, even when probed from many
+ * viewer positions, can reveal more than which grid cell they are in.
+ *
  * What is NOT shared (feature-specific, lives in each feature's own module):
  *   - Browsing: the `scored` CTE (relevance formula) and relevance sorting
  *   - Research: plain sorting with no scoring at all
@@ -22,6 +29,20 @@ import { buildGeoSignalsSql } from '../../services/matchScoringService';
  * All SQL is raw and fully parameterized; dynamic ORDER BY/LIMIT parts are
  * assembled from validated enums and bound parameters only.
  */
+
+/**
+ * Candidate coordinates are rounded to this many decimals: 0.01° is ~1.1 km
+ * north-south and ~0.9 km east-west at Moroccan latitudes.
+ */
+export const LOCATION_GRID_DECIMALS = 2;
+
+/**
+ * Max per-axis offset (degrees) added to a cell centre for the map, so markers
+ * in one cell don't stack. Under half a cell (0.005°), so a marker never leaves
+ * its own cell. It is derived from the public user id, so subtracting it gives
+ * back the cell centre and nothing finer.
+ */
+export const MAP_SPREAD_DEGREES = 0.004;
 
 export type SortField = 'relevance' | 'age' | 'location' | 'fame' | 'commonTags';
 export type SortOrder = 'asc' | 'desc';
@@ -53,6 +74,11 @@ export interface CandidateFilters {
    * Flip here in one place — both features honour it.
    */
   tagsMatch?: 'any' | 'all';
+  /**
+   * Swipe mode (Browsing only): the viewer's id. Hides everyone they already
+   * liked or passed on, so the deck never deals the same profile twice.
+   */
+  excludeSwipedBy?: number;
 }
 
 export interface CandidatePagination {
@@ -73,9 +99,10 @@ export interface CandidateRow {
   fame_rating: number;
   shared_tag_count: number;
   shared_tags: string[];
+  /** Whole km (at least 1) from the viewer to the candidate's ~1 km grid cell. */
   distance_km: number | null;
   same_area: boolean;
-  /** Jittered neighborhood-level coordinates for the bonus map; never exact GPS. */
+  /** Grid cell centre plus a fixed per-user spread inside the cell; never exact GPS. */
   map_latitude: number | null;
   map_longitude: number | null;
 }
@@ -109,14 +136,14 @@ export const getViewerOrientation = async (viewerId: number): Promise<ViewerOrie
 };
 
 export interface CandidateCte {
-  /** `WITH viewer AS (...), base AS (...), candidates AS (...)` — no trailing SELECT. */
+  /** `WITH viewer AS (...), grid_users AS (...), base AS (...), candidates AS (...)` — no trailing SELECT. */
   sql: string;
-  /** Bound parameters used by `sql` ($1..$N): viewer id + geo constants. */
+  /** Bound parameters used by `sql` ($1..$N): viewer id, grid constants, geo constants. */
   values: any[];
 }
 
 /**
- * Builds the shared three-CTE candidate pool. Callers continue binding their
+ * Builds the shared candidate-pool CTE chain. Callers continue binding their
  * own parameters from `values.length + 1` and select `FROM candidates` (or a
  * feature-specific CTE wrapping it, like Browsing's `scored`).
  *
@@ -125,12 +152,24 @@ export interface CandidateCte {
  */
 export const buildCandidateCte = (viewerId: number): CandidateCte => {
   const values: any[] = [viewerId];
+  const bind = (value: number): string => {
+    values.push(value);
+    return `$${values.length}`;
+  };
 
-  // Geographic signal expressions, bound once ($2..$N) and reused across both
-  // CTE levels so the Haversine formula and its radius constant appear a
-  // single time.
+  const pGridDecimals = bind(LOCATION_GRID_DECIMALS);
+  const pSpread = bind(MAP_SPREAD_DEGREES);
+
+  // Geographic signal expressions, bound once and reused across both CTE
+  // levels so the Haversine formula and its radius constant appear a single
+  // time. Their `u` alias is a grid_users row, so every signal is cell-level.
   const geo = buildGeoSignalsSql(values.length + 1);
   values.push(...geo.values);
+
+  // Fixed pseudo-random spread in [-spread, +spread] per axis, from the user id
+  // (bigint so large ids can't overflow int4).
+  const spread = (multiplier: number): string =>
+    `((((u.id::bigint * ${multiplier}) % 1000)::float / 999.0) - 0.5) * 2 * ${pSpread}::float`;
 
   const sql = `
     WITH viewer AS (
@@ -139,6 +178,15 @@ export const buildCandidateCte = (viewerId: number): CandidateCte => {
              latitude, longitude, location_text
       FROM users
       WHERE id = $1
+    ),
+    -- Candidates with coordinates snapped to the ~1 km grid. Every column below
+    -- reads location from here, never from users.latitude/longitude directly.
+    grid_users AS (
+      SELECT id, username, first_name, last_name, gender, sexual_preferences,
+             fame_rating, location_text, birthdate, is_verified,
+             ROUND(latitude::numeric, ${pGridDecimals}::int)::float AS latitude,
+             ROUND(longitude::numeric, ${pGridDecimals}::int)::float AS longitude
+      FROM users
     ),
     base AS (
       SELECT
@@ -149,11 +197,11 @@ export const buildCandidateCte = (viewerId: number): CandidateCte => {
         u.gender,
         u.fame_rating,
         u.location_text,
-        CASE WHEN u.latitude IS NULL THEN NULL
-             ELSE ROUND((u.latitude + (((u.id % 101) - 50) * 0.0002))::numeric, 5)::float
+        CASE WHEN u.latitude IS NULL OR u.longitude IS NULL THEN NULL
+             ELSE ROUND((u.latitude + ${spread(7919)})::numeric, 5)::float
         END AS map_latitude,
-        CASE WHEN u.longitude IS NULL THEN NULL
-             ELSE ROUND((u.longitude + ((((u.id * 31) % 101) - 50) * 0.0002))::numeric, 5)::float
+        CASE WHEN u.latitude IS NULL OR u.longitude IS NULL THEN NULL
+             ELSE ROUND((u.longitude + ${spread(104729)})::numeric, 5)::float
         END AS map_longitude,
         CASE WHEN u.birthdate IS NULL THEN NULL
              ELSE date_part('year', age(u.birthdate))::int
@@ -176,7 +224,7 @@ export const buildCandidateCte = (viewerId: number): CandidateCte => {
           WHERE p.user_id = u.id
           ORDER BY p.is_profile_picture DESC, p.created_at ASC, p.id ASC
           LIMIT 1) AS photo_url
-      FROM users u
+      FROM grid_users u
       CROSS JOIN viewer v
       WHERE u.id <> v.id
         AND u.is_verified = TRUE
@@ -247,6 +295,12 @@ export const buildFilterWhereClause = (
     }
   }
 
+  if (filters.excludeSwipedBy !== undefined) {
+    const pViewer = next(filters.excludeSwipedBy);
+    whereFilters.push(`NOT EXISTS (SELECT 1 FROM likes sl WHERE sl.liker_id = ${pViewer} AND sl.liked_id = c.id)`);
+    whereFilters.push(`NOT EXISTS (SELECT 1 FROM passes sp WHERE sp.user_id = ${pViewer} AND sp.passed_user_id = c.id)`);
+  }
+
   return whereFilters.length > 0 ? `AND ${whereFilters.join('\n      AND ')}` : '';
 };
 
@@ -280,12 +334,19 @@ export const mapCandidateRow = (r: Record<string, any>): CandidateRow => ({
   map_longitude: r.map_longitude === null || r.map_longitude === undefined ? null : Number(r.map_longitude),
 });
 
-/** Shared SELECT column list for the candidate summary (alias `c`). */
+/**
+ * Shared SELECT column list for the candidate summary (alias `c`).
+ * The exposed distance is whole kilometres with a floor of 1 km, matching the
+ * grid precision it is computed from (sorting and scoring still use the
+ * unrounded cell-level value internally).
+ */
 export const CANDIDATE_SELECT_COLUMNS = `
       c.id, c.username, c.first_name, c.last_name, c.age, c.gender,
       c.photo_url, c.location_text, c.fame_rating,
       c.shared_tag_count, c.shared_tags,
-      ROUND(c.distance_km::numeric, 1)::float AS distance_km,
+      CASE WHEN c.distance_km IS NULL THEN NULL
+           ELSE GREATEST(1, ROUND(c.distance_km::numeric))::int
+      END AS distance_km,
       c.same_area, c.map_latitude, c.map_longitude`;
 
 /** Page query + count query pair sharing one WHERE, so total never disagrees. */

@@ -24,21 +24,33 @@
  *   - 1s delay between search calls; 429 aborts pool building with a warning
  *   - image DOWNLOADS go to the images.pexels.com CDN (no api key, not part of
  *     the 200/hour api budget) and are still politely throttled
+ *   - without PEXELS_API_KEY the cached pool is reused even when stale, so a
+ *     key is only needed to build a brand-new pool
  *   - any failure (api, download, bad bytes) logs a warning and that profile
- *     is simply seeded WITHOUT a photo — the run never crashes
+ *     gets a locally generated placeholder avatar instead — the run never crashes
+ *
+ * Every seeded profile passes the profile-completion gate (biography, 2-5 tags,
+ * a profile picture, a location with coordinates), so all of them show up in
+ * browse/search/map. Orientations are binary but varied: most profiles want
+ * the opposite gender, ~18% want the same gender, so testers of any
+ * orientation get candidates.
  *
  * Usage (from Backend/):
  *   npm run seed:fake                      # 500 profiles
  *   npm run seed:fake -- --count 50        # smaller test run
  *   npm run seed:fake -- --wipe            # delete previous seed users first
- *   npm run seed:fake -- --no-photos       # skip Pexels entirely
+ *   npm run seed:fake -- --no-photos       # skip Pexels; placeholder avatars only
  *   npm run seed:fake -- --fresh-pool      # ignore the cached URL pool
  *
- * All seed accounts share the password: Seed!Pass2026
+ * Password: all seed accounts share one password, read from SEED_PASSWORD
+ * (environment or Backend/.env). When it is unset, a strong random password is
+ * generated for the run and printed once at the end.
  */
 import bcrypt from 'bcrypt';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import zlib from 'zlib';
 import { faker } from '@faker-js/faker';
 import { pool, query } from '../src/config/db';
 import { env } from '../src/config/env';
@@ -55,8 +67,11 @@ import {
 // ------------------------------- Constants --------------------------------
 
 const SEED_USERNAME_REGEX = '^seed_user_[0-9]+$';
-const SEED_PASSWORD = 'Seed!Pass2026';
 const BCRYPT_SALT_ROUNDS = 10; // mirrors authService
+const GENERATED_PASSWORD_LENGTH = 20;
+
+// Share of profiles attracted to their own gender (the rest want the opposite one).
+const SAME_SEX_PREFERENCE_SHARE = 0.18;
 
 const DEFAULT_COUNT = 500;
 const POOL_CACHE_PATH = path.join(env.DATA_DIR, 'pexelsPool.json');
@@ -157,6 +172,11 @@ interface PoolCache {
   photos: PoolPhoto[];
 }
 
+interface SeedPassword {
+  value: string;
+  fromEnv: boolean;
+}
+
 interface SeedSpec {
   index: number;
   username: string;
@@ -164,12 +184,12 @@ interface SeedSpec {
   firstName: string;
   lastName: string;
   gender: Gender;
-  sexualPreferences: string;
+  sexualPreferences: Gender;
   birthdate: string; // yyyy-mm-dd
-  biography: string | null;
-  latitude: number | null;
-  longitude: number | null;
-  locationText: string | null;
+  biography: string;
+  latitude: number;
+  longitude: number;
+  locationText: string;
   lastConnection: Date;
   tags: string[];
   photo: PoolPhoto | null; // assigned from the pool (null = no photo)
@@ -210,6 +230,43 @@ const parseArgs = (): CliArgs => {
 };
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+// ------------------------------- Password ----------------------------------
+
+/**
+ * Strong random password (crypto RNG) with at least one lowercase, uppercase,
+ * digit and symbol, so it also satisfies the app's registration rules.
+ */
+const generateStrongPassword = (): string => {
+  const classes = [
+    'abcdefghijkmnopqrstuvwxyz',
+    'ABCDEFGHJKLMNPQRSTUVWXYZ',
+    '23456789',
+    '!@#%^*-_=+',
+  ];
+  const all = classes.join('');
+  const chars = classes.map((set) => set[crypto.randomInt(set.length)]);
+  while (chars.length < GENERATED_PASSWORD_LENGTH) chars.push(all[crypto.randomInt(all.length)]);
+
+  // Fisher-Yates so the guaranteed characters are not always at the start.
+  for (let i = chars.length - 1; i > 0; i -= 1) {
+    const j = crypto.randomInt(i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars.join('');
+};
+
+/** SEED_PASSWORD from the environment, or a freshly generated one. */
+const resolveSeedPassword = (): SeedPassword => {
+  const fromEnv = process.env.SEED_PASSWORD;
+  if (fromEnv && fromEnv.trim().length > 0) {
+    if (fromEnv.length < 8) {
+      console.warn('[Seed] Warning: SEED_PASSWORD is shorter than 8 characters.');
+    }
+    return { value: fromEnv, fromEnv: true };
+  }
+  return { value: generateStrongPassword(), fromEnv: false };
+};
 
 // ------------------------------ Pexels pool --------------------------------
 
@@ -266,7 +323,10 @@ const savePoolCache = (photos: PoolPhoto[]): void => {
  * NEVER throws — on any failure it returns whatever it managed to collect.
  */
 const buildPhotoPool = async (neededPerGender: number, freshPool: boolean): Promise<PoolPhoto[]> => {
-  if (!freshPool) {
+  if (freshPool && !env.PEXELS_API_KEY) {
+    console.warn('[Seed] Warning: --fresh-pool needs PEXELS_API_KEY; reusing the cached pool instead.');
+  }
+  if (!freshPool || !env.PEXELS_API_KEY) {
     const cache = loadPoolCache(!env.PEXELS_API_KEY);
     if (cache) {
       const male = cache.photos.filter((p) => p.gender === 'male').length;
@@ -279,7 +339,10 @@ const buildPhotoPool = async (neededPerGender: number, freshPool: boolean): Prom
   }
 
   if (!env.PEXELS_API_KEY) {
-    console.warn('[Seed] Warning: PEXELS_API_KEY is not set and no cached Pexels pool is available — seeding WITHOUT photos.');
+    console.warn(
+      '[Seed] Warning: PEXELS_API_KEY is not set and no cached Pexels pool is available — ' +
+      'every profile gets a generated placeholder avatar.'
+    );
     return [];
   }
 
@@ -343,11 +406,11 @@ const downloadAndStorePhoto = async (photoUrl: string): Promise<string | null> =
   try {
     response = await fetch(photoUrl, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
   } catch (error: any) {
-    console.warn(`[Seed] Warning: photo download failed (${error?.message}) — profile will have no photo.`);
+    console.warn(`[Seed] Warning: photo download failed (${error?.message}) — using a placeholder avatar.`);
     return null;
   }
   if (!response.ok) {
-    console.warn(`[Seed] Warning: photo download returned HTTP ${response.status} — profile will have no photo.`);
+    console.warn(`[Seed] Warning: photo download returned HTTP ${response.status} — using a placeholder avatar.`);
     return null;
   }
 
@@ -362,7 +425,7 @@ const downloadAndStorePhoto = async (photoUrl: string): Promise<string | null> =
     const mime = detectImageMime(tmpPath);
     if (!mime) {
       safeUnlink(tmpPath);
-      console.warn('[Seed] Warning: downloaded file is not a valid JPEG/PNG/WebP — profile will have no photo.');
+      console.warn('[Seed] Warning: downloaded file is not a valid JPEG/PNG/WebP — using a placeholder avatar.');
       return null;
     }
 
@@ -372,7 +435,104 @@ const downloadAndStorePhoto = async (photoUrl: string): Promise<string | null> =
     return `${UPLOAD_URL_PREFIX}/${filename}`;
   } catch (error: any) {
     safeUnlink(tmpPath);
-    console.warn(`[Seed] Warning: could not store photo (${error?.message}) — profile will have no photo.`);
+    console.warn(`[Seed] Warning: could not store photo (${error?.message}) — using a placeholder avatar.`);
+    return null;
+  }
+};
+
+// --------------------------- Placeholder avatars ----------------------------
+
+const AVATAR_SIZE = 256;
+const AVATAR_BACKGROUNDS: [number, number, number][] = [
+  [94, 129, 172], [191, 97, 106], [163, 190, 140], [208, 135, 112],
+  [180, 142, 173], [136, 192, 208], [235, 203, 139], [143, 188, 187],
+];
+
+const CRC32_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n += 1) {
+    let c = n;
+    for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+
+const crc32 = (buffer: Buffer): number => {
+  let c = 0xffffffff;
+  for (const byte of buffer) c = CRC32_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+};
+
+const pngChunk = (type: string, data: Buffer): Buffer => {
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length);
+  const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body));
+  return Buffer.concat([length, body, crc]);
+};
+
+/**
+ * Renders a generic head-and-shoulders silhouette on a coloured gradient as a
+ * real PNG (no dependencies, no network), so a profile always has a valid
+ * profile picture even with --no-photos or when a download fails.
+ */
+const renderAvatarPng = (seed: number): Buffer => {
+  const [r, g, b] = AVATAR_BACKGROUNDS[seed % AVATAR_BACKGROUNDS.length];
+  const rowLength = AVATAR_SIZE * 3 + 1;
+  const raw = Buffer.alloc(rowLength * AVATAR_SIZE);
+  const centre = AVATAR_SIZE / 2;
+
+  for (let y = 0; y < AVATAR_SIZE; y += 1) {
+    raw[y * rowLength] = 0; // filter type: none
+    const shade = 1.1 - (0.3 * y) / AVATAR_SIZE;
+    for (let x = 0; x < AVATAR_SIZE; x += 1) {
+      const inHead = (x - centre) ** 2 + (y - 100) ** 2 <= 46 ** 2;
+      const inShoulders = ((x - centre) / 96) ** 2 + ((y - 250) / 84) ** 2 <= 1;
+      const offset = y * rowLength + 1 + x * 3;
+      if (inHead || inShoulders) {
+        raw[offset] = 245;
+        raw[offset + 1] = 245;
+        raw[offset + 2] = 245;
+      } else {
+        raw[offset] = Math.min(255, Math.round(r * shade));
+        raw[offset + 1] = Math.min(255, Math.round(g * shade));
+        raw[offset + 2] = Math.min(255, Math.round(b * shade));
+      }
+    }
+  }
+
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(AVATAR_SIZE, 0);
+  header.writeUInt32BE(AVATAR_SIZE, 4);
+  header[8] = 8; // bit depth
+  header[9] = 2; // colour type: RGB
+  // compression, filter and interlace methods stay 0
+
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk('IHDR', header),
+    pngChunk('IDAT', zlib.deflateSync(raw)),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+};
+
+/** Stores a placeholder avatar like an upload; returns its public URL or null. */
+const storePlaceholderAvatar = (seed: number): string | null => {
+  const unique = `${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+  const filename = `${unique}.png`; // mirrors uploadService.buildFilename
+  const filePath = path.join(UPLOAD_DIR, filename);
+  try {
+    fs.writeFileSync(filePath, renderAvatarPng(seed));
+    if (detectImageMime(filePath) !== 'image/png') {
+      safeUnlink(filePath);
+      return null;
+    }
+    return `${UPLOAD_URL_PREFIX}/${filename}`;
+  } catch (error: any) {
+    safeUnlink(filePath);
+    console.warn(`[Seed] Warning: could not write placeholder avatar (${error?.message}).`);
     return null;
   }
 };
@@ -417,23 +577,35 @@ const pickLastConnection = (): Date => {
   return faker.date.recent({ days: 10 });
 };
 
+/**
+ * Every seeded profile gets coordinates (manual-location users are geocoded
+ * too, so a text-only location is no longer a real-world case) and a
+ * location_text in the same "Neighborhood, City, Country" shape the geocoder
+ * produces for real users.
+ */
 const pickMoroccanLocation = (): {
   locationText: string;
-  latitude: number | null;
-  longitude: number | null;
+  latitude: number;
+  longitude: number;
 } => {
   const location = faker.helpers.arrayElement(MOROCCAN_LOCATIONS);
-  const hasCoords = Math.random() < 0.85; // keep some text-only fallback cases
 
   return {
-    locationText: location.text,
-    latitude: hasCoords ? Number((location.latitude + faker.number.float({ min: -0.018, max: 0.018 })).toFixed(6)) : null,
-    longitude: hasCoords ? Number((location.longitude + faker.number.float({ min: -0.018, max: 0.018 })).toFixed(6)) : null,
+    locationText: `${location.text}, Morocco`,
+    latitude: Number((location.latitude + faker.number.float({ min: -0.018, max: 0.018 })).toFixed(6)),
+    longitude: Number((location.longitude + faker.number.float({ min: -0.018, max: 0.018 })).toFixed(6)),
   };
 };
 
+/** Two distinct template sentences, for more varied bios. */
 const pickMoroccanBio = (): string =>
-  faker.helpers.arrayElement(MOROCCAN_BIO_TEMPLATES);
+  faker.helpers.arrayElements(MOROCCAN_BIO_TEMPLATES, 2).join(' ');
+
+/** Binary preference: mostly the opposite gender, sometimes the same one. */
+const pickSexualPreference = (gender: Gender): Gender => {
+  if (Math.random() < SAME_SEX_PREFERENCE_SHARE) return gender;
+  return gender === 'male' ? 'female' : 'male';
+};
 
 const buildSpecs = (count: number, pool: PoolPhoto[]): SeedSpec[] => {
   // Shuffle per-gender pools so photo assignment looks random run to run.
@@ -465,7 +637,7 @@ const buildSpecs = (count: number, pool: PoolPhoto[]): SeedSpec[] => {
       firstName: faker.helpers.arrayElement(MOROCCAN_FIRST_NAMES[gender]),
       lastName: faker.helpers.arrayElement(MOROCCAN_LAST_NAMES),
       gender,
-      sexualPreferences: gender === 'male' ? 'female' : 'male',
+      sexualPreferences: pickSexualPreference(gender),
       birthdate: faker.date.birthdate({ min: 21, max: 48, mode: 'age' }).toISOString().slice(0, 10),
       biography: pickMoroccanBio(),
       latitude: location.latitude,
@@ -523,7 +695,12 @@ async function main(): Promise<void> {
   const args = parseArgs();
   const startedAt = Date.now();
 
-  console.log(`[Seed] Seeding ${args.count} fake profile(s)${args.noPhotos ? ' WITHOUT photos' : ''}...`);
+  const seedPassword = resolveSeedPassword();
+
+  console.log(
+    `[Seed] Seeding ${args.count} fake profile(s)` +
+    `${args.noPhotos ? ' with placeholder avatars (--no-photos)' : ''}...`
+  );
 
   try {
     // Refuse to run on top of an old seed set unless --wipe was given.
@@ -550,7 +727,7 @@ async function main(): Promise<void> {
     if (!args.noPhotos && withoutPhoto > 0) {
       console.warn(
         `[Seed] Warning: the Pexels pool was too small for ${withoutPhoto} profile(s) — ` +
-        'those profiles will not get a photo.'
+        'those profiles get a generated placeholder avatar instead.'
       );
     }
 
@@ -558,9 +735,11 @@ async function main(): Promise<void> {
     const downloaded = await downloadAll(specs);
 
     // 3. DB inserts: users, tags, photos (same insertPhoto the real feature uses), fame.
-    const passwordHash = await bcrypt.hash(SEED_PASSWORD, BCRYPT_SALT_ROUNDS); // one hash for all seed accounts
+    const passwordHash = await bcrypt.hash(seedPassword.value, BCRYPT_SALT_ROUNDS); // one hash for all seed accounts
     const tagCache = new Map<string, number>();
     let photosStored = 0;
+    let placeholdersStored = 0;
+    let incompleteProfiles = 0;
 
     for (const spec of specs) {
       const userResult = await query<{ id: number }>(
@@ -582,10 +761,19 @@ async function main(): Promise<void> {
         await query(`INSERT INTO user_tags (user_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [userId, tagId]);
       }
 
-      const publicUrl = downloaded.get(spec.index) ?? null;
+      // Every profile needs a profile picture to pass the completion gate:
+      // fall back to a generated avatar when there is no downloaded portrait.
+      let publicUrl = downloaded.get(spec.index) ?? null;
+      if (publicUrl) {
+        photosStored += 1;
+      } else {
+        publicUrl = storePlaceholderAvatar(spec.index);
+        if (publicUrl) placeholdersStored += 1;
+      }
       if (publicUrl) {
         await insertPhoto(userId, publicUrl, true); // marked as profile picture, like a real upload
-        photosStored += 1;
+      } else {
+        incompleteProfiles += 1;
       }
 
       // Deterministic fame via the real service (views=0, likes=0, +10 when complete).
@@ -596,10 +784,35 @@ async function main(): Promise<void> {
 
     const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
     console.log(
-      `\n[Seed] Done in ${elapsed}s — ${specs.length} profiles, ${photosStored} photos stored ` +
-      `(${specs.length - photosStored} without photo), password for every seed account: ${SEED_PASSWORD}`
+      `\n[Seed] Done in ${elapsed}s — ${specs.length} profiles, ${photosStored} Pexels photos, ` +
+      `${placeholdersStored} placeholder avatars.`
     );
-    console.log('[Seed] Log in with e.g. seed_user_0001@matcha.seed / Seed!Pass2026');
+    if (incompleteProfiles > 0) {
+      console.warn(
+        `[Seed] Warning: ${incompleteProfiles} profile(s) have no picture (disk error?) and ` +
+        'will not pass the profile-completion gate.'
+      );
+    }
+
+    // Orientation mix, with one example account per combination for testers.
+    const combos: [Gender, Gender][] = [['male', 'female'], ['female', 'male'], ['male', 'male'], ['female', 'female']];
+    console.log('[Seed] Orientation mix (gender -> wants):');
+    for (const [gender, wants] of combos) {
+      const matching = specs.filter((spec) => spec.gender === gender && spec.sexualPreferences === wants);
+      const example = matching[0] ? `, e.g. ${matching[0].username}` : '';
+      console.log(`[Seed]   ${gender} -> ${wants}: ${matching.length}${example}`);
+    }
+
+    console.log('[Seed] Log in with a seed username (e.g. seed_user_0001) and the seed password.');
+    if (seedPassword.fromEnv) {
+      console.log('[Seed] Password: uses SEED_PASSWORD from the environment.');
+    } else {
+      console.log('[Seed] ================================================================');
+      console.log('[Seed]  SEED_PASSWORD was not set. Generated password for ALL seed accounts:');
+      console.log(`[Seed]      ${seedPassword.value}`);
+      console.log('[Seed]  It is not stored anywhere: save it now, or set SEED_PASSWORD and re-run with --wipe.');
+      console.log('[Seed] ================================================================');
+    }
   } catch (error: any) {
     console.error('[Seed] Fatal error (database?):', error?.message || error);
     process.exitCode = 1;

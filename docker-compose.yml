@@ -5,10 +5,10 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-132456789}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: matcha_db
     ports:
-      - "5433:5432"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
     volumes:
       - pgdata:/var/lib/postgresql
       - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
@@ -26,7 +26,7 @@ services:
     container_name: matcha-adminer
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "127.0.0.1:${ADMINER_HOST_PORT:-8080}:8080"
     depends_on:
       - db
     networks:
@@ -41,7 +41,9 @@ services:
     ports:
       - "5173:5173"
     environment:
-      - VITE_API_URL=http://localhost:3000
+      # The Vite dev proxy runs inside this container, so it must reach the
+      # backend by its service name rather than localhost.
+      - VITE_PROXY_TARGET=http://backend:3000
     depends_on:
       - backend
     volumes:
@@ -57,10 +59,14 @@ services:
     container_name: matcha-backend
     restart: unless-stopped
     env_file:
-      - ./Backend/.env
+      - path: ./.env
+        required: false
+      - path: ./Backend/.env
+        required: false
     environment:
       DB_HOST: matcha-pg
       DB_PORT: 5432
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     ports:
       - "3000:3000"
     depends_on:
